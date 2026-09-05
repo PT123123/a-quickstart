@@ -21,4 +21,26 @@
         <item>small</item>
         <item>medium</item>
     </string-array>
+
+    <string-array name="key_gesture_entries">
+        <item>长按启动（上滑用于搜索角标）</item>
+        <item>上滑启动（长按用于搜索角标）</item>
+    </string-array>
+    <string-array name="key_gesture_values">
+        <item>long_press</item>
+        <item>swipe_up</item>
+    </string-array>
+
+    <string-array name="recent_time_entries">
+        <item>10 分钟</item>
+        <item>30 分钟</item>
+        <item>2 小时</item>
+        <item>5 天</item>
+    </string-array>
+    <string-array name="recent_time_values">
+        <item>600000</item>
+        <item>1800000</item>
+        <item>7200000</item>
+        <item>432000000</item>
+    </string-array>
 </resources>

@@ -1,0 +1,90 @@
+package com.quickstart.util;
+
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+
+/**
+ * 按键绑定工具类：读取绑定配置、启动绑定应用。
+ * 统一供主界面按键、列表角标、设置页等调用。
+ */
+public final class KeyBindingHelper {
+
+    private static final String PREFS = "settings";
+
+    private KeyBindingHelper() {}
+
+    /** 启动指定数字键绑定的应用 */
+    public static boolean launchBoundApp(Context ctx, int digit) {
+        SharedPreferences sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        String pkg = sp.getString("key_bind_" + digit, "");
+        if (pkg.isEmpty()) return false;
+
+        try {
+            Intent intent = ctx.getPackageManager().getLaunchIntentForPackage(pkg);
+            if (intent != null) {
+                ctx.startActivity(intent);
+                return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        // 启动失败，清除失效绑定
+        sp.edit().remove("key_bind_" + digit).remove("key_gesture_" + digit).apply();
+        return false;
+    }
+
+    /** 获取指定数字键绑定的包名，未绑定返回 null */
+    public static String getBoundPackage(Context ctx, int digit) {
+        return ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString("key_bind_" + digit, null);
+    }
+
+    /** 获取全局手势类型，默认 long_press */
+    public static String getGlobalGesture(Context ctx) {
+        return ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString("key_gesture", "long_press");
+    }
+
+    /** 获取数字键的手势类型（用于数字键启动），默认 long_press */
+    public static String getGesture(Context ctx, int digit) {
+        return ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString("key_gesture_" + digit, "long_press");
+    }
+
+    /** 获取搜索列表角标的手势类型（与数字键手势相反） */
+    public static String getBadgeGesture(Context ctx) {
+        String keyGesture = getGlobalGesture(ctx);
+        return "long_press".equals(keyGesture) ? "swipe_up" : "long_press";
+    }
+
+    /** 判断数字键是否用长按启动 */
+    public static boolean isKeyLaunchLongPress(Context ctx) {
+        return "long_press".equals(getGlobalGesture(ctx));
+    }
+
+    /** 绑定应用到数字键 */
+    public static void bind(Context ctx, int digit, String pkg) {
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString("key_bind_" + digit, pkg)
+                .putString("key_gesture_" + digit, "long_press")
+                .apply();
+    }
+
+    /** 清除数字键绑定 */
+    public static void unbind(Context ctx, int digit) {
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .remove("key_bind_" + digit)
+                .remove("key_gesture_" + digit)
+                .apply();
+    }
+
+    /** 设置数字键手势类型 */
+    public static void setGesture(Context ctx, int digit, String gesture) {
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString("key_gesture_" + digit, gesture)
+                .apply();
+    }
+}

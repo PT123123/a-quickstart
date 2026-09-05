@@ -1,4 +1,4 @@
-package com.likpia.quickstartpro.service;
+package com.quickstart.service;
 
 import android.accessibilityservice.AccessibilityService;
 import android.view.accessibility.AccessibilityEvent;

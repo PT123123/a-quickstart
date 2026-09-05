@@ -53,14 +53,34 @@
             android:summary="在最近更新的应用图标上显示圆点提示"
             android:defaultValue="true" />
 
+        <ListPreference
+            android:key="recent_time_range"
+            android:title="最近更新范围"
+            android:summary="设置多长时间内更新的应用显示圆点"
+            android:defaultValue="604800000"
+            android:entries="@array/recent_time_entries"
+            android:entryValues="@array/recent_time_values" />
+
     </PreferenceCategory>
 
     <PreferenceCategory android:title="键盘快捷应用">
 
+        <ListPreference
+            android:key="key_gesture"
+            android:title="数字键启动方式"
+            android:summary="选择数字键快速启动搜索列表应用的手势（另一个手势用于列表角标启动）"
+            android:defaultValue="long_press"
+            android:entries="@array/key_gesture_entries"
+            android:entryValues="@array/key_gesture_values" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="数据管理">
+
         <Preference
-            android:key="key_gesture_binding"
-            android:title="按键手势绑定"
-            android:summary="为每个数字键绑定快捷应用（长按/上滑启动）" />
+            android:key="import_export_config"
+            android:title="导入/导出配置"
+            android:summary="导出当前配置到剪贴板，或从剪贴板导入配置" />
 
     </PreferenceCategory>
 

@@ -1,5 +1,6 @@
-package com.likpia.quickstartpro;
+package com.quickstart;
 
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.view.MenuItem;
@@ -13,6 +14,8 @@ import androidx.preference.Preference;
 import androidx.preference.PreferenceFragmentCompat;
 import androidx.preference.SeekBarPreference;
 import androidx.preference.SwitchPreferenceCompat;
+
+import java.util.concurrent.Executors;
 
 /**
  * 快开启 - 设置界面
@@ -101,6 +104,96 @@ public class SettingsActivity extends AppCompatActivity {
                     AppCompatDelegate.setDefaultNightMode(mode);
                     return true;
                 });
+            }
+
+            // 全局手势类型
+            ListPreference keyGesture = findPreference("key_gesture");
+            if (keyGesture != null) {
+                keyGesture.setOnPreferenceChangeListener((pref, val) -> true);
+            }
+
+            // 导入/导出配置
+            Preference importExport = findPreference("import_export_config");
+            if (importExport != null) {
+                importExport.setOnPreferenceClickListener(pref -> {
+                    showImportExportDialog();
+                    return true;
+                });
+            }
+        }
+
+        /** 显示导入/导出配置对话框 */
+        private void showImportExportDialog() {
+            String[] options = {"导出配置到剪贴板", "从剪贴板导入配置"};
+            new androidx.appcompat.app.AlertDialog.Builder(requireContext())
+                    .setTitle("导入/导出配置")
+                    .setItems(options, (dialog, which) -> {
+                        if (which == 0) {
+                            exportConfig();
+                        } else {
+                            importConfig();
+                        }
+                    })
+                    .setNegativeButton("取消", null)
+                    .show();
+        }
+
+        /** 导出配置到剪贴板 */
+        private void exportConfig() {
+            try {
+                org.json.JSONObject json = new org.json.JSONObject();
+                SharedPreferences sp = getPreferenceManager().getSharedPreferences();
+                // 导出所有设置
+                json.put("sort_mode", sp.getString("sort_mode", "智能排序"));
+                json.put("key_gesture", sp.getString("key_gesture", "long_press"));
+                json.put("theme_mode", sp.getString("theme_mode", "follow_system"));
+                json.put("window_size", sp.getString("window_size", "full"));
+                json.put("column_count", sp.getInt("column_count", 3));
+                json.put("recent_app_dot", sp.getBoolean("recent_app_dot", true));
+                json.put("background_color", sp.getString("background_color", ""));
+                json.put("font_color", sp.getString("font_color", ""));
+
+                String jsonStr = json.toString(2); // 格式化缩进
+
+                android.content.ClipboardManager clipboard =
+                        (android.content.ClipboardManager) requireContext()
+                                .getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("config", jsonStr));
+
+                Toast.makeText(requireContext(), "配置已导出到剪贴板", Toast.LENGTH_SHORT).show();
+            } catch (Throwable t) {
+                Toast.makeText(requireContext(), "导出失败: " + t.getMessage(), Toast.LENGTH_SHORT).show();
+            }
+        }
+
+        /** 从剪贴板导入配置 */
+        private void importConfig() {
+            try {
+                android.content.ClipboardManager clipboard =
+                        (android.content.ClipboardManager) requireContext()
+                                .getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+                if (clipboard.getPrimaryClip() == null ||
+                    clipboard.getPrimaryClip().getItemCount() == 0) {
+                    Toast.makeText(requireContext(), "剪贴板为空", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                String text = clipboard.getPrimaryClip().getItemAt(0).getText().toString();
+                org.json.JSONObject json = new org.json.JSONObject(text);
+
+                SharedPreferences.Editor editor = getPreferenceManager().getSharedPreferences().edit();
+                if (json.has("sort_mode")) editor.putString("sort_mode", json.getString("sort_mode"));
+                if (json.has("key_gesture")) editor.putString("key_gesture", json.getString("key_gesture"));
+                if (json.has("theme_mode")) editor.putString("theme_mode", json.getString("theme_mode"));
+                if (json.has("window_size")) editor.putString("window_size", json.getString("window_size"));
+                if (json.has("column_count")) editor.putInt("column_count", json.getInt("column_count"));
+                if (json.has("recent_app_dot")) editor.putBoolean("recent_app_dot", json.getBoolean("recent_app_dot"));
+                if (json.has("background_color")) editor.putString("background_color", json.getString("background_color"));
+                if (json.has("font_color")) editor.putString("font_color", json.getString("font_color"));
+                editor.apply();
+
+                Toast.makeText(requireContext(), "配置已导入，重启应用生效", Toast.LENGTH_LONG).show();
+            } catch (Throwable t) {
+                Toast.makeText(requireContext(), "导入失败: " + t.getMessage(), Toast.LENGTH_SHORT).show();
             }
         }
 
