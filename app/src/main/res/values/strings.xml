@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">快开启</string>
+    <string name="search_hint">输入 T9 数字搜索应用</string>
+    <string name="empty_result">没有匹配的应用</string>
+
+    <string name="accessibility_service_description">开启后，快启动Pro 会自动点击广告中的「跳过」按钮。无需 ROOT。</string>
+    <string name="accessibility_service_summary">自动跳过开屏广告</string>
+</resources>
