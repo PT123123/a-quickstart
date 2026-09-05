@@ -8,4 +8,5 @@
     <color name="t9_key_text_pressed">#FFFFFF</color>
     <color name="t9_key_letter">#888888</color>
     <color name="t9_display_bg">#FFFFFF</color>
+    <color name="t9_key_bg">#FFFFFF</color>
 </resources>

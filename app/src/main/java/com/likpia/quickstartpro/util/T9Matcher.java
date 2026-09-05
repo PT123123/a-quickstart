@@ -101,15 +101,35 @@ public final class T9Matcher {
 
     /**
      * 判断用户输入的 T9 数字串是否匹配某条应用名。
-     * @param query 用户输入（只应包含数字 2-9，但本方法不过滤，由调用方保证）
-     * @param fingerprints 该应用名预计算好的指纹列表
-     * @return 任一指纹以 query 为前缀即命中
+     * 支持两种模式：
+     *  1) 精确前缀匹配：指纹以 query 开头
+     *  2) 跳跃模糊匹配：query 的数字在指纹中按序出现（可不连续）
+     *
+     * 例：query="577" → 精确匹配 "5773"(计算器全拼jisuanqi→5774264)，
+     *     也跳跃匹配 "5477"(计算器首字母jsj→575) 不命中，但 "577" 可跳跃匹配 "5774264"
      */
     public static boolean matches(String query, List<String> fingerprints) {
-        if (query == null || query.isEmpty()) return true; // 空查询 → 全部显示
+        if (query == null || query.isEmpty()) return true;
         for (String fp : fingerprints) {
-            if (fp.startsWith(query)) return true;
+            if (fp.startsWith(query)) return true;          // 精确前缀
+            if (fuzzyMatches(query, fp)) return true;        // 跳跃匹配
         }
         return false;
+    }
+
+    /**
+     * 跳跃匹配：query 中的每个数字按序在 fingerprint 中出现（中间可跳过其他数字）。
+     * 这样输入 "577" 可以匹配全拼 "5774264"（计算器 jisuanqi）的前三位，
+     * 也可以匹配更长的序列中任意位置的连续/非连续子序列。
+     */
+    private static boolean fuzzyMatches(String query, String fingerprint) {
+        if (query.length() > fingerprint.length()) return false;
+        int qi = 0;
+        for (int fi = 0; fi < fingerprint.length() && qi < query.length(); fi++) {
+            if (fingerprint.charAt(fi) == query.charAt(qi)) {
+                qi++;
+            }
+        }
+        return qi == query.length();
     }
 }
