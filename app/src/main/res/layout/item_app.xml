@@ -24,6 +24,7 @@
         android:layout_marginTop="6dp"
         android:textSize="12sp"
         android:textColor="@color/app_name_text"
+        android:fontFamily="sans-serif-medium" />
         android:singleLine="true"
         android:ellipsize="end"
         android:gravity="center" />
