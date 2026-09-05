@@ -35,6 +35,20 @@
             android:label="设置"
             android:theme="@style/AppTheme" />
 
+        <!-- 已隐藏应用管理 -->
+        <activity
+            android:name=".HiddenAppsActivity"
+            android:exported="false"
+            android:label="已隐藏的应用"
+            android:theme="@style/AppTheme" />
+
+        <!-- 数字键绑定管理 -->
+        <activity
+            android:name=".KeyBindingActivity"
+            android:exported="false"
+            android:label="数字键绑定应用"
+            android:theme="@style/AppTheme" />
+
         <!-- 广告跳过无障碍服务 -->
         <service
             android:name=".service.AdSkipAccessibilityService"

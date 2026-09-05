@@ -60,4 +60,26 @@
         <item>6</item>
         <item>7</item>
     </string-array>
+
+    <string-array name="swipe_distance_entries">
+        <item>灵敏（30px）</item>
+        <item>适中（60px）</item>
+        <item>迟钝（90px）</item>
+    </string-array>
+    <string-array name="swipe_distance_values">
+        <item>30</item>
+        <item>60</item>
+        <item>90</item>
+    </string-array>
+
+    <string-array name="long_press_duration_entries">
+        <item>快速（250ms）</item>
+        <item>标准（400ms）</item>
+        <item>缓慢（600ms）</item>
+    </string-array>
+    <string-array name="long_press_duration_values">
+        <item>250</item>
+        <item>400</item>
+        <item>600</item>
+    </string-array>
 </resources>

@@ -11,6 +11,7 @@ import android.os.Looper;
 import android.provider.Settings;
 import android.view.View;
 import android.view.WindowManager;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.PopupMenu;
 import android.widget.TextView;
@@ -26,6 +27,7 @@ import com.quickstart.util.AppCache;
 import com.quickstart.util.AppLoader;
 import com.quickstart.util.FastCache;
 import com.quickstart.util.IconCache;
+import com.quickstart.util.KeyBindingHelper;
 import com.quickstart.util.T9Matcher;
 
 import java.util.ArrayList;
@@ -137,84 +139,173 @@ public class MainActivity extends AppCompatActivity {
                 launchApp(filtered.get(position));
             }
         });
+
+        // 加载数字键绑定图标
+        loadKeyBindingIcons();
+    }
+
+    /**
+     * 加载数字键绑定应用的图标，显示在按键右下角。
+     * 从 KeyBindingHelper 读取绑定包名，异步加载图标。
+     */
+    private void loadKeyBindingIcons() {
+        int[] bindViewIds = {R.id.key_1_bind, R.id.key_2_bind, R.id.key_3_bind,
+                R.id.key_4_bind, R.id.key_5_bind, R.id.key_6_bind,
+                R.id.key_7_bind, R.id.key_8_bind, R.id.key_9_bind};
+        for (int i = 0; i < bindViewIds.length; i++) {
+            int digit = i + 1;
+            ImageView bindView = keypad.findViewById(bindViewIds[i]);
+            if (bindView == null) continue;
+
+            String pkg = KeyBindingHelper.getBoundPackage(this, digit);
+            if (pkg == null || pkg.isEmpty()) {
+                bindView.setVisibility(View.GONE);
+                continue;
+            }
+
+            // 异步加载图标
+            final ImageView target = bindView;
+            final int keyDigit = digit;
+            io.execute(() -> {
+                try {
+                    android.graphics.drawable.Drawable icon =
+                        getPackageManager().getApplicationIcon(pkg);
+                    main.post(() -> {
+                        target.setImageDrawable(icon);
+                        target.setVisibility(View.VISIBLE);
+                    });
+                } catch (PackageManager.NameNotFoundException e) {
+                    // 应用已卸载，清除失效绑定
+                    KeyBindingHelper.unbind(MainActivity.this, keyDigit);
+                    main.post(() -> target.setVisibility(View.GONE));
+                }
+            });
+        }
+    }
+
+    /** 读取上滑触发距离设置（默认 60px） */
+    private int getSwipeDistanceThreshold() {
+        return Integer.parseInt(getSharedPreferences("settings", MODE_PRIVATE)
+                .getString("swipe_distance", "60"));
+    }
+
+    /** 读取长按触发时长设置（默认 400ms） */
+    private int getLongPressDuration() {
+        return Integer.parseInt(getSharedPreferences("settings", MODE_PRIVATE)
+                .getString("long_press_duration", "400"));
     }
 
     /**
      * 为单个按键设置手势：
      * - 单击（快速按下并释放）：T9 输入数字
-     * - 长按（按住超过 400ms 不移动）：如果手势设为"长按"则启动绑定应用
-     * - 上滑（按住并向上滑动超过 40px）：如果手势设为"上滑"则启动绑定应用
+     * - 长按（按住超过设定时长不移动）：启动该按键绑定的应用
+     * - 上滑（按住并向上滑动超过设定距离）：启动搜索列表对应位置的应用
      *
-     * 关键：上滑和单击通过延时区分 — 手指按下后等待 200ms，
-     * 如果手指移动了则进入手势模式（取消单击），否则触发单击输入。
+     * 长按检测使用 Handler.postDelayed 手动管理，以便支持用户自定义时长。
      */
     private void setupKeyGesture(View key, int digit) {
         final int[] digitCopy = {digit};
         final boolean[] longPressFired = {false};
+        final boolean[] tapFired = {false};
         final float[] startY = {0};
         final boolean[] hasMoved = {false};
 
-        // 使用 GestureDetector 处理长按和单击
-        final android.view.GestureDetector detector = new android.view.GestureDetector(this,
-                new android.view.GestureDetector.SimpleOnGestureListener() {
-                    @Override
-                    public boolean onDown(android.view.MotionEvent e) {
-                        startY[0] = e.getY();
-                        hasMoved[0] = false;
-                        longPressFired[0] = false;
-                        return true;
-                    }
+        // 读取用户设置的灵敏度参数
+        final int swipeThreshold = getSwipeDistanceThreshold();
+        final int longPressTimeout = getLongPressDuration();
 
-                    @Override
-                    public boolean onSingleTapUp(android.view.MotionEvent e) {
-                        // 快速单击：T9 输入
-                        if (!longPressFired[0] && !hasMoved[0]) {
-                            onDigitPressed(digitCopy[0]);
-                        }
-                        return true;
-                    }
+        final Handler handler = new Handler(Looper.getMainLooper());
 
-                    @Override
-                    public void onLongPress(android.view.MotionEvent e) {
-                        // 长按：根据全局设置决定是否启动应用
-                        longPressFired[0] = true;
-                        onKeyLongPress(digitCopy[0]);
-                    }
+        // 长按检测 Runnable
+        final Runnable[] longPressRunnable = new Runnable[1];
+        longPressRunnable[0] = () -> {
+            if (!hasMoved[0]) {
+                longPressFired[0] = true;
+                onKeyLongPress(digitCopy[0]);
+            }
+        };
 
-                    @Override
-                    public boolean onScroll(android.view.MotionEvent e1, android.view.MotionEvent e2,
-                            float distanceX, float distanceY) {
-                        // 检测上滑：手指向上移动
-                        float dy = e1.getY() - e2.getY();
-                        if (dy > 40 && !longPressFired[0]) {
-                            hasMoved[0] = true;
-                            onKeySwipeUp(digitCopy[0]);
-                            return true;
-                        }
-                        return false;
-                    }
-                });
+        key.setOnTouchListener((v, event) -> {
+            int action = event.getActionMasked();
 
-        key.setOnTouchListener((v, event) -> detector.onTouchEvent(event));
+            if (action == android.view.MotionEvent.ACTION_DOWN) {
+                startY[0] = event.getY();
+                hasMoved[0] = false;
+                longPressFired[0] = false;
+                tapFired[0] = false;
+                // 按下：高亮按键背景 + 文字变白
+                v.setBackgroundColor(0xFF1976D2);
+                setKeyTextColor(v, 0xFFFFFFFF);
+                // 启动长按定时器
+                handler.postDelayed(longPressRunnable[0], longPressTimeout);
+                return true;
+            }
+
+            if (action == android.view.MotionEvent.ACTION_MOVE) {
+                // 检测上滑：手指向上移动超过设定阈值
+                float dy = startY[0] - event.getY();
+                if (dy > swipeThreshold && !longPressFired[0]) {
+                    hasMoved[0] = true;
+                    handler.removeCallbacks(longPressRunnable[0]); // 取消长按
+                    onKeySwipeUp(digitCopy[0]);
+                }
+                return true;
+            }
+
+            if (action == android.view.MotionEvent.ACTION_UP) {
+                // 取消长按定时器
+                handler.removeCallbacks(longPressRunnable[0]);
+                // 抬起/取消：恢复默认背景 + 文字颜色
+                v.setBackgroundResource(R.drawable.bg_t9_key);
+                setKeyTextColor(v, getResources().getColor(R.color.t9_key_text, null));
+                // 快速单击（未触发长按也未滑动）
+                if (!longPressFired[0] && !hasMoved[0]) {
+                    onDigitPressed(digitCopy[0]);
+                }
+                return true;
+            }
+
+            if (action == android.view.MotionEvent.ACTION_CANCEL) {
+                handler.removeCallbacks(longPressRunnable[0]);
+                v.setBackgroundResource(R.drawable.bg_t9_key);
+                setKeyTextColor(v, getResources().getColor(R.color.t9_key_text, null));
+                return true;
+            }
+
+            return false;
+        });
+    }
+
+    /** 设置按键内所有文字的颜色（数字 + 字母） */
+    private void setKeyTextColor(View key, int color) {
+        if (key instanceof android.view.ViewGroup) {
+            android.view.ViewGroup group = (android.view.ViewGroup) key;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                View child = group.getChildAt(i);
+                if (child instanceof TextView) {
+                    ((TextView) child).setTextColor(color);
+                }
+            }
+        }
     }
 
     /**
-     * 长按数字键：根据全局手势设置决定是否启动对应位置的应用。
-     * - 全局设为"长按"时，长按启动位置 N 的应用（N=digit-1，0对应位置9）
-     * - 全局设为"上滑"时，长按不启动（由上滑启动）
+     * 长按数字键：启动该按键绑定的应用（在设置中绑定）。
+     * 如果没有绑定应用，则不执行任何操作。
      */
     private void onKeyLongPress(int digit) {
-        if (!isKeyLaunchLongPress()) return;
-        launchAppAtDigit(digit);
+        boolean launched = KeyBindingHelper.launchBoundApp(this, digit);
+        if (!launched) {
+            // 未绑定应用时，回退到启动搜索列表对应位置的应用
+            launchAppAtDigit(digit);
+        }
     }
 
     /**
-     * 上滑数字键：根据全局手势设置决定是否启动对应位置的应用。
-     * - 全局设为"上滑"时，上滑启动位置 N 的应用
-     * - 全局设为"长按"时，上滑不启动（由长按启动）
+     * 上滑数字键：启动搜索列表对应位置的应用。
+     * digit 0-9 对应位置 9,0,1,2,...,8
      */
     private void onKeySwipeUp(int digit) {
-        if (isKeyLaunchLongPress()) return;
         launchAppAtDigit(digit);
     }
 
@@ -224,12 +315,6 @@ public class MainActivity extends AppCompatActivity {
         if (position < filtered.size()) {
             launchApp(filtered.get(position));
         }
-    }
-
-    /** 数字键是否用长按启动（读取全局设置） */
-    private boolean isKeyLaunchLongPress() {
-        return "long_press".equals(getSharedPreferences("settings", MODE_PRIVATE)
-                .getString("key_gesture", "long_press"));
     }
 
     /** 角标现在由 Adapter 根据 position 自动显示，无需手动刷新 */
@@ -276,13 +361,23 @@ public class MainActivity extends AppCompatActivity {
         return "输入 '" + q + "' 暂无匹配";
     }
 
+    /** 获取当前隐藏的应用包名集合 */
+    private java.util.Set<String> getHiddenPackages() {
+        return getSharedPreferences("settings", MODE_PRIVATE)
+                .getStringSet("hidden_apps", new java.util.HashSet<>());
+    }
+
     private void doFilter() {
         String q = query.toString();
+        java.util.Set<String> hidden = getHiddenPackages();
         filtered = new ArrayList<>();
         if (q.isEmpty() && currentCategory == null) {
-            filtered.addAll(allApps);
+            for (AppEntry e : allApps) {
+                if (!hidden.contains(e.packageName)) filtered.add(e);
+            }
         } else {
             for (AppEntry e : allApps) {
+                if (hidden.contains(e.packageName)) continue;
                 boolean matchQuery = q.isEmpty() || T9Matcher.matches(q, e.fingerprints);
                 boolean matchCat = currentCategory == null || matchCategory(e, currentCategory);
                 if (matchQuery && matchCat) filtered.add(e);
@@ -375,32 +470,47 @@ public class MainActivity extends AppCompatActivity {
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 startActivity(intent);
             }
-            // 启动后清空输入
+            // 启动成功后清空输入并刷新列表（恢复全量显示）
             query.setLength(0);
-            t9Display.setText("");
-            t9Hint.setText(buildHint());
+            onQueryChanged();
         } catch (Throwable t) {
             Toast.makeText(this, "无法启动 " + entry.label, Toast.LENGTH_SHORT).show();
+            // 启动失败也要清空输入并恢复列表
+            query.setLength(0);
+            onQueryChanged();
         }
     }
 
     private boolean showAppMenu(AppEntry entry, View anchor) {
         PopupMenu popup = new PopupMenu(this, anchor);
-        popup.getMenu().add(0, 1, 0, "卸载");
-        popup.getMenu().add(0, 2, 1, "应用详情");
-        popup.getMenu().add(0, 3, 2, "分享给朋友");
-        popup.getMenu().add(0, 4, 3, "收藏");
+        popup.getMenu().add(0, 1, 0, "打开");
+        popup.getMenu().add(0, 2, 1, "应用信息");
+        popup.getMenu().add(0, 3, 2, "卸载");
+        popup.getMenu().add(0, 4, 3, "隐藏");
         popup.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
-                case 1: uninstallApp(entry); return true;
+                case 1: launchApp(entry); return true;
                 case 2: showAppDetails(entry); return true;
-                case 3: shareApp(entry); return true;
-                case 4: Toast.makeText(this, "已收藏 " + entry.label, Toast.LENGTH_SHORT).show(); return true;
+                case 3: uninstallApp(entry); return true;
+                case 4: hideApp(entry); return true;
             }
             return false;
         });
         popup.show();
         return true;
+    }
+
+    /** 隐藏指定应用：写入 SharedPreferences 并从列表中移除 */
+    private void hideApp(AppEntry entry) {
+        SharedPreferences sp = getSharedPreferences("settings", MODE_PRIVATE);
+        java.util.Set<String> hidden = new java.util.HashSet<>(
+                sp.getStringSet("hidden_apps", new java.util.HashSet<>()));
+        hidden.add(entry.packageName);
+        sp.edit().putStringSet("hidden_apps", hidden).apply();
+        Toast.makeText(this, "已隐藏 " + entry.label, Toast.LENGTH_SHORT).show();
+        // 从 allApps 中移除并刷新列表
+        allApps.removeIf(e -> e.packageName.equals(entry.packageName));
+        doFilter();
     }
 
     private void uninstallApp(AppEntry entry) {
@@ -674,7 +784,9 @@ public class MainActivity extends AppCompatActivity {
                 preloadSortData(); // 预加载安装时间和启动次数
                 sortAllApps();     // 排序
 
-                // 显示已排序的缓存列表
+                // 显示已排序的缓存列表（排除隐藏应用）
+                java.util.Set<String> hidden = getHiddenPackages();
+                cached.removeIf(e -> hidden.contains(e.packageName));
                 main.post(() -> {
                     allApps = cached;
                     doFilter();
@@ -694,7 +806,9 @@ public class MainActivity extends AppCompatActivity {
                 preloadSortData(); // 重新预加载排序数据
                 sortAllApps();     // 重新排序
 
-                // 更新 UI
+                // 更新 UI（排除隐藏应用）
+                java.util.Set<String> hidden2 = getHiddenPackages();
+                finalLoaded.removeIf(e -> hidden2.contains(e.packageName));
                 main.post(() -> {
                     allApps = finalLoaded;
                     doFilter();
@@ -710,6 +824,9 @@ public class MainActivity extends AppCompatActivity {
     private void refreshAppsFullScan() {
         io.execute(() -> {
             final List<AppEntry> loaded = AppLoader.loadLaunchableApps(this);
+            // 排除隐藏应用
+            java.util.Set<String> hidden = getHiddenPackages();
+            loaded.removeIf(e -> hidden.contains(e.packageName));
             AppCache.save(this, loaded);
             main.post(() -> {
                 allApps = loaded;

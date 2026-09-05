@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="?android:attr/colorBackground">
+
+    <!-- 顶部提示 -->
+    <TextView
+        android:id="@+id/hidden_apps_hint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="12dp"
+        android:text="长按应用可将其隐藏。在此可恢复已隐藏的应用。"
+        android:textSize="13sp"
+        android:textColor="#888888" />
+
+    <!-- 空状态提示 -->
+    <TextView
+        android:id="@+id/hidden_empty_hint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="24dp"
+        android:gravity="center"
+        android:text="暂无隐藏的应用"
+        android:textSize="15sp"
+        android:textColor="#AAAAAA"
+        android:visibility="gone" />
+
+    <!-- 隐藏应用列表 -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/hidden_apps_list"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+</LinearLayout>
