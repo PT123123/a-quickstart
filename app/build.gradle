@@ -1,0 +1,38 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.likpia.quickstartpro'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.likpia.quickstartpro"
+        minSdk 21
+        targetSdk 34
+        versionCode 200
+        versionName "2.0.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.recyclerview:recyclerview:1.3.2'
+    implementation 'androidx.core:core:1.13.1'
+    implementation 'com.google.android.material:material:1.12.0'
+
+    // TinyPinyin: lightweight Chinese-to-pinyin library
+    implementation 'com.github.promeg:tinypinyin:2.0.3'
+}

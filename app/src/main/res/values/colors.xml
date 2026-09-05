@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="primary">#1565C0</color>
+    <color name="primary_dark">#0D47A1</color>
+    <color name="accent">#FF6D00</color>
+    <color name="background">#FAFAFA</color>
+    <color name="t9_key_text">#222222</color>
+    <color name="t9_key_text_pressed">#FFFFFF</color>
+    <color name="t9_key_letter">#888888</color>
+    <color name="t9_display_bg">#FFFFFF</color>
+</resources>
