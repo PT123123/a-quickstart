@@ -77,8 +77,8 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
         if (fontColor != 0) h.name.setTextColor(fontColor);
         if (e.icon != null) h.icon.setImageDrawable(e.icon);
 
-        // 根据列数自适应图标和文字大小
-        updateItemSize(h);
+        // 让每个方格呈正方形：高度 = 单元格宽度
+        updateItemSquareSize(h);
         h.itemView.setOnClickListener(v -> {
             if (clickListener != null) clickListener.onAppClick(e);
         });
@@ -91,26 +91,38 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
         }
     }
 
-    /** 根据列数动态调整图标和文字大小，让内容填满方格 */
-    private void updateItemSize(VH h) {
-        // 列数越多 → 图标越小；列数越少 → 图标越大
-        // 2列: 56dp, 3列: 44dp, 4列: 36dp, 5列: 30dp
-        int iconSize;
+    /**
+     * 让每个方格填满且比例协调：
+     * - 宽度由 GridLayoutManager 决定（屏幕宽 / 列数）
+     * - 高度设为宽度的 1.3 倍（竖屏下方格略高，放得下图标+文字）
+     * - 图标大小 = 单元格宽度的 65%
+     */
+    private void updateItemSquareSize(VH h) {
+        // 用屏幕宽度计算单元格宽度（parent.getWidth() 在首次绑定时可能为 0）
+        int screenWidth = h.itemView.getResources().getDisplayMetrics().widthPixels;
+        int cellWidth = screenWidth / columnCount;
+        if (cellWidth > 0) {
+            // 高度 = 宽度 × 1.3，竖屏下方格更舒展
+            ViewGroup.LayoutParams lp = h.itemView.getLayoutParams();
+            lp.height = (int) (cellWidth * 1.3);
+            h.itemView.setLayoutParams(lp);
+
+            // 图标占单元格宽度的 65%
+            int iconSize = (int) (cellWidth * 0.65);
+            ViewGroup.LayoutParams iconLp = h.icon.getLayoutParams();
+            iconLp.width = iconSize;
+            iconLp.height = iconSize;
+            h.icon.setLayoutParams(iconLp);
+        }
+        // 文字大小根据列数调整
         float textSize;
         switch (columnCount) {
-            case 2: iconSize = 56; textSize = 14f; break;
-            case 3: iconSize = 44; textSize = 12f; break;
-            case 4: iconSize = 36; textSize = 11f; break;
-            case 5: iconSize = 30; textSize = 10f; break;
-            default: iconSize = 44; textSize = 12f; break;
+            case 2: textSize = 14f; break;
+            case 3: textSize = 12f; break;
+            case 4: textSize = 11f; break;
+            case 5: textSize = 10f; break;
+            default: textSize = 12f; break;
         }
-        // 图标
-        ViewGroup.LayoutParams iconLp = h.icon.getLayoutParams();
-        int sizePx = (int) (iconSize * h.itemView.getResources().getDisplayMetrics().density);
-        iconLp.width = sizePx;
-        iconLp.height = sizePx;
-        h.icon.setLayoutParams(iconLp);
-        // 文字
         h.name.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, textSize);
     }
 
