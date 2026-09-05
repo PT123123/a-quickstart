@@ -242,12 +242,14 @@ public class MainActivity extends AppCompatActivity {
             }
 
             if (action == android.view.MotionEvent.ACTION_MOVE) {
-                // 检测上滑：手指向上移动超过设定阈值
-                float dy = startY[0] - event.getY();
-                if (dy > swipeThreshold && !longPressFired[0]) {
-                    hasMoved[0] = true;
-                    handler.removeCallbacks(longPressRunnable[0]); // 取消长按
-                    onKeySwipeUp(digitCopy[0]);
+                // 检测上滑：手指向上移动超过设定阈值（只触发一次）
+                if (!hasMoved[0] && !longPressFired[0]) {
+                    float dy = startY[0] - event.getY();
+                    if (dy > swipeThreshold) {
+                        hasMoved[0] = true;
+                        handler.removeCallbacks(longPressRunnable[0]); // 取消长按
+                        onKeySwipeUp(digitCopy[0]);
+                    }
                 }
                 return true;
             }
