@@ -69,6 +69,7 @@ public class MainActivity extends AppCompatActivity {
         int columnCount = getColumnCount();
         recycler.setLayoutManager(new GridLayoutManager(this, columnCount));
         recycler.setAdapter(adapter);
+        adapter.setColumnCount(columnCount);
 
         // 应用设置
         boolean showDot = getSharedPreferences("settings", MODE_PRIVATE)
@@ -343,6 +344,7 @@ public class MainActivity extends AppCompatActivity {
         if (layoutManager != null) {
             layoutManager.setSpanCount(count);
         }
+        adapter.setColumnCount(count);
     }
 
     /** 弹出列数选择对话框 */

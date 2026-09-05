@@ -42,6 +42,9 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
     /** 是否显示最近更新圆点 */
     private boolean showRecentDot = true;
 
+    /** 当前列数，用于自适应图标/文字大小 */
+    private int columnCount = 3;
+
     public void setOnAppClickListener(OnAppClickListener l) { this.clickListener = l; }
     public void setOnAppLongClickListener(OnAppLongClickListener l) { this.longClickListener = l; }
 
@@ -50,6 +53,8 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
     public void setFontColor(int color) { this.fontColor = color; notifyDataSetChanged(); }
 
     public void setShowRecentDot(boolean show) { this.showRecentDot = show; notifyDataSetChanged(); }
+
+    public void setColumnCount(int count) { this.columnCount = count; notifyDataSetChanged(); }
 
     public void submit(List<AppEntry> list) {
         items.clear();
@@ -71,6 +76,9 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
         h.name.setText(buildHighlightedLabel(e));
         if (fontColor != 0) h.name.setTextColor(fontColor);
         if (e.icon != null) h.icon.setImageDrawable(e.icon);
+
+        // 根据列数自适应图标和文字大小
+        updateItemSize(h);
         h.itemView.setOnClickListener(v -> {
             if (clickListener != null) clickListener.onAppClick(e);
         });
@@ -81,6 +89,29 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
         if (h.recentDot != null) {
             h.recentDot.setVisibility(showRecentDot && e.recentlyUpdated ? View.VISIBLE : View.GONE);
         }
+    }
+
+    /** 根据列数动态调整图标和文字大小，让内容填满方格 */
+    private void updateItemSize(VH h) {
+        // 列数越多 → 图标越小；列数越少 → 图标越大
+        // 2列: 56dp, 3列: 44dp, 4列: 36dp, 5列: 30dp
+        int iconSize;
+        float textSize;
+        switch (columnCount) {
+            case 2: iconSize = 56; textSize = 14f; break;
+            case 3: iconSize = 44; textSize = 12f; break;
+            case 4: iconSize = 36; textSize = 11f; break;
+            case 5: iconSize = 30; textSize = 10f; break;
+            default: iconSize = 44; textSize = 12f; break;
+        }
+        // 图标
+        ViewGroup.LayoutParams iconLp = h.icon.getLayoutParams();
+        int sizePx = (int) (iconSize * h.itemView.getResources().getDisplayMetrics().density);
+        iconLp.width = sizePx;
+        iconLp.height = sizePx;
+        h.icon.setLayoutParams(iconLp);
+        // 文字
+        h.name.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, textSize);
     }
 
     /**
