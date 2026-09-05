@@ -47,6 +47,8 @@ public class SettingsActivity extends AppCompatActivity {
     public static class SettingsFragment extends PreferenceFragmentCompat {
         @Override
         public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
+            // 使用和 MainActivity 同一个 SharedPreferences 文件，确保设置同步
+            getPreferenceManager().setSharedPreferencesName("settings");
             setPreferencesFromResource(R.xml.preferences, rootKey);
 
             // 窗口大小

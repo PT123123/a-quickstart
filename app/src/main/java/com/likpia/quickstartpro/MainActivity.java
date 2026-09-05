@@ -371,19 +371,19 @@ public class MainActivity extends AppCompatActivity {
         String size = getSharedPreferences("settings", MODE_PRIVATE)
                 .getString("window_size", "full");
         if (!"full".equals(size)) {
-            WindowManager.LayoutParams params = getWindow().getAttributes();
+            int screenW = getResources().getDisplayMetrics().widthPixels;
+            int screenH = getResources().getDisplayMetrics().heightPixels;
             int w, h;
             if ("small".equals(size)) {
-                w = (int) (getResources().getDisplayMetrics().widthPixels * 0.5);
-                h = (int) (getResources().getDisplayMetrics().heightPixels * 0.5);
+                w = (int) (screenW * 0.5);
+                h = (int) (screenH * 0.5);
             } else { // medium
-                w = (int) (getResources().getDisplayMetrics().widthPixels * 0.75);
-                h = (int) (getResources().getDisplayMetrics().heightPixels * 0.75);
+                w = (int) (screenW * 0.75);
+                h = (int) (screenH * 0.75);
             }
-            params.width = w;
-            params.height = h;
-            params.gravity = android.view.Gravity.CENTER;
-            getWindow().setAttributes(params);
+            // 使用 setLayout 更可靠地设置窗口大小
+            getWindow().setLayout(w, h);
+            getWindow().setGravity(android.view.Gravity.CENTER);
         }
     }
 
