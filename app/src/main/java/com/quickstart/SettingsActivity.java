@@ -1,5 +1,6 @@
 package com.quickstart;
 
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.os.Bundle;
@@ -151,6 +152,15 @@ public class SettingsActivity extends AppCompatActivity {
                 keyGesture.setOnPreferenceChangeListener((pref, val) -> true);
             }
 
+            // 数字键绑定应用
+            Preference keyBinding = findPreference("key_binding");
+            if (keyBinding != null) {
+                keyBinding.setOnPreferenceClickListener(pref -> {
+                    startActivity(new Intent(requireContext(), KeyBindingActivity.class));
+                    return true;
+                });
+            }
+
             // 列数设置
             ListPreference columnCount = findPreference("column_count");
             if (columnCount != null) {
@@ -167,6 +177,15 @@ public class SettingsActivity extends AppCompatActivity {
             ListPreference recentTime = findPreference("recent_time_range");
             if (recentTime != null) {
                 recentTime.setOnPreferenceChangeListener((pref, val) -> true);
+            }
+
+            // 已隐藏的应用
+            Preference hiddenApps = findPreference("hidden_apps");
+            if (hiddenApps != null) {
+                hiddenApps.setOnPreferenceClickListener(pref -> {
+                    startActivity(new Intent(requireContext(), HiddenAppsActivity.class));
+                    return true;
+                });
             }
 
             // 导入/导出配置
