@@ -10,4 +10,6 @@
     <color name="t9_display_bg">#FFFFFF</color>
     <color name="t9_key_bg">#FFFFFF</color>
     <color name="keypad_bg">#EEEEEE</color>
+    <color name="app_name_text">#222222</color>
+    <color name="hint_text">#888888</color>
 </resources>
