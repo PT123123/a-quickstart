@@ -3,15 +3,32 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+
+    <!-- 蓝色渐变背景 -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M54,30 L54,50 L70,50 A16,16 0 1,1 54,30 Z" />
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M38,54 A16,16 0 1,1 54,70 L54,54 L38,54 Z" />
+        android:fillColor="#1565C0"
+        android:pathData="M0,0h108v108h-108z" />
+
+    <!-- 放大镜镜圈（白色圆环） -->
     <path
         android:strokeColor="#FFFFFF"
         android:strokeWidth="4"
-        android:pathData="M30,54 L78,54 M54,30 L54,78"
-        android:fillColor="#00000000" />
+        android:fillColor="#00000000"
+        android:pathData="M54,42 m-14,0 a14,14 0 1,0 28,0 a14,14 0 1,0 -28,0" />
+
+    <!-- 放大镜手柄 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M63.5,51.5 L74,62 A3,3 0 0,1 69.5,66.5 L59,56 A3,3 0 0,1 63.5,51.5 Z" />
+
+    <!-- Quick 文字（用路径模拟） -->
+    <!-- Q -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M32,72 L32,78 L30,78 L30,72 Z M30,72 L36,72 L36,78 L34,78 L34,74 L32,74 Z" />
+    <!-- 简化的 Quick 用矩形条代替 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M28,70 L40,70 L40,72 L35,72 L35,82 L33,82 L33,72 L28,72 Z" />
+
 </vector>

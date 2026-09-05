@@ -1,4 +1,4 @@
-package com.likpia.quickstartpro.model;
+package com.quickstart.model;
 
 import android.content.Intent;
 import android.graphics.drawable.Drawable;

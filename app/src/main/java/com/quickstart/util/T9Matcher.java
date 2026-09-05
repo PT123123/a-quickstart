@@ -1,4 +1,4 @@
-package com.likpia.quickstartpro.util;
+package com.quickstart.util;
 
 import com.github.promeg.pinyinhelper.Pinyin;
 

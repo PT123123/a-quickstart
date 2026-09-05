@@ -12,8 +12,8 @@
         android:paddingHorizontal="4dp"
         android:paddingVertical="6dp"
         android:background="?attr/selectableItemBackground"
-        android:focusable="true"
-        android:clickable="true">
+        android:clickable="true"
+        android:focusable="true">
 
         <ImageView
             android:id="@+id/app_icon"
@@ -44,5 +44,22 @@
         android:layout_marginTop="4dp"
         android:layout_marginEnd="4dp"
         android:background="@drawable/bg_recent_dot"
+        android:visibility="gone" />
+
+    <!-- 快捷启动数字角标 -->
+    <TextView
+        android:id="@+id/key_badge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="3dp"
+        android:layout_marginBottom="3dp"
+        android:minWidth="16dp"
+        android:minHeight="16dp"
+        android:gravity="center"
+        android:background="@drawable/bg_key_badge"
+        android:textColor="#FFFFFF"
+        android:textSize="10sp"
+        android:textStyle="bold"
         android:visibility="gone" />
 </FrameLayout>
