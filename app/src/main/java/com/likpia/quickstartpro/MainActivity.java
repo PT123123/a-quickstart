@@ -13,7 +13,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.likpia.quickstartpro.adapter.AppListAdapter;
@@ -60,7 +60,9 @@ public class MainActivity extends AppCompatActivity {
         adapter = new AppListAdapter();
         adapter.setOnAppClickListener(this::launchApp);
         adapter.setOnAppLongClickListener(this::showAppMenu);
-        recycler.setLayoutManager(new LinearLayoutManager(this));
+
+        int columnCount = getColumnCount();
+        recycler.setLayoutManager(new GridLayoutManager(this, columnCount));
         recycler.setAdapter(adapter);
 
         sortLabel.setOnClickListener(v -> showSortMenu());
@@ -234,6 +236,7 @@ public class MainActivity extends AppCompatActivity {
         popup.getMenu().add(0, 3, 2, "字母顺序");
         popup.getMenu().add(0, 4, 3, "使用频率");
         popup.getMenu().add(0, 5, 4, "切换主题");
+        popup.getMenu().add(0, 6, 5, "设置列数");
         popup.setOnMenuItemClickListener(item -> {
             String[] labels = {"", "智能排序", "最近安装", "字母顺序", "使用频率"};
             if (item.getItemId() >= 1 && item.getItemId() <= 4) {
@@ -242,6 +245,10 @@ public class MainActivity extends AppCompatActivity {
             }
             if (item.getItemId() == 5) {
                 toggleTheme();
+                return true;
+            }
+            if (item.getItemId() == 6) {
+                showColumnCountDialog();
                 return true;
             }
             return false;
@@ -259,6 +266,41 @@ public class MainActivity extends AppCompatActivity {
             androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(
                     androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES);
         }
+    }
+
+    /** 获取当前列数（默认 3） */
+    private int getColumnCount() {
+        return getSharedPreferences("settings", MODE_PRIVATE)
+                .getInt("column_count", 3);
+    }
+
+    /** 设置列数并刷新列表 */
+    private void setColumnCount(int count) {
+        getSharedPreferences("settings", MODE_PRIVATE)
+                .edit().putInt("column_count", count).apply();
+        GridLayoutManager layoutManager = (GridLayoutManager) recycler.getLayoutManager();
+        if (layoutManager != null) {
+            layoutManager.setSpanCount(count);
+        }
+    }
+
+    /** 弹出列数选择对话框 */
+    private void showColumnCountDialog() {
+        int current = getColumnCount();
+        String[] options = {"2 列", "3 列", "4 列", "5 列"};
+        int[] values = {2, 3, 4, 5};
+        int checked = 1; // default 3
+        for (int i = 0; i < values.length; i++) {
+            if (values[i] == current) checked = i;
+        }
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("设置列数")
+                .setSingleChoiceItems(options, checked, (dialog, which) -> {
+                    setColumnCount(values[which]);
+                    dialog.dismiss();
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     private void setupCategoryChips() {
