@@ -36,10 +36,20 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
     /** 当前查询串（用于高亮），可为空 */
     private String highlightQuery = "";
 
+    /** 用户自定义字体颜色，0 表示使用默认 */
+    private int fontColor = 0;
+
+    /** 是否显示最近更新圆点 */
+    private boolean showRecentDot = true;
+
     public void setOnAppClickListener(OnAppClickListener l) { this.clickListener = l; }
     public void setOnAppLongClickListener(OnAppLongClickListener l) { this.longClickListener = l; }
 
     public void setHighlightQuery(String q) { this.highlightQuery = q == null ? "" : q; }
+
+    public void setFontColor(int color) { this.fontColor = color; notifyDataSetChanged(); }
+
+    public void setShowRecentDot(boolean show) { this.showRecentDot = show; notifyDataSetChanged(); }
 
     public void submit(List<AppEntry> list) {
         items.clear();
@@ -59,6 +69,7 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
     public void onBindViewHolder(@NonNull VH h, int position) {
         AppEntry e = items.get(position);
         h.name.setText(buildHighlightedLabel(e));
+        if (fontColor != 0) h.name.setTextColor(fontColor);
         if (e.icon != null) h.icon.setImageDrawable(e.icon);
         h.itemView.setOnClickListener(v -> {
             if (clickListener != null) clickListener.onAppClick(e);
@@ -66,6 +77,10 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
         h.itemView.setOnLongClickListener(v -> {
             return longClickListener != null && longClickListener.onAppLongClick(e, v);
         });
+        // 最近更新圆点
+        if (h.recentDot != null) {
+            h.recentDot.setVisibility(showRecentDot && e.recentlyUpdated ? View.VISIBLE : View.GONE);
+        }
     }
 
     /**
@@ -93,10 +108,12 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
     static final class VH extends RecyclerView.ViewHolder {
         final ImageView icon;
         final TextView name;
+        final View recentDot;
         VH(@NonNull View itemView) {
             super(itemView);
             icon = itemView.findViewById(R.id.app_icon);
             name = itemView.findViewById(R.id.app_name);
+            recentDot = itemView.findViewById(R.id.recent_dot);
         }
     }
 }
