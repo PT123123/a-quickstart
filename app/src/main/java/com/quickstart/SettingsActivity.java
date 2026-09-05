@@ -4,6 +4,7 @@ import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.view.MenuItem;
+import android.widget.EditText;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -11,6 +12,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.app.AppCompatDelegate;
 import androidx.preference.ListPreference;
 import androidx.preference.Preference;
+import androidx.preference.PreferenceScreen;
 import androidx.preference.PreferenceFragmentCompat;
 import androidx.preference.SeekBarPreference;
 import androidx.preference.SwitchPreferenceCompat;
@@ -22,20 +24,61 @@ import java.util.concurrent.Executors;
  */
 public class SettingsActivity extends AppCompatActivity {
 
+    private SettingsFragment fragment;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_settings);
+
+        // 设置 ActionBar
         if (getSupportActionBar() != null) {
             getSupportActionBar().setDisplayHomeAsUpEnabled(true);
             getSupportActionBar().setTitle("设置");
         }
+
         if (savedInstanceState == null) {
+            fragment = new SettingsFragment();
             getSupportFragmentManager()
                     .beginTransaction()
-                    .replace(R.id.settings_container, new SettingsFragment())
+                    .replace(R.id.settings_container, fragment)
                     .commit();
         }
+
+        // 搜索功能（在 fragment 创建后初始化）
+        EditText searchBox = findViewById(R.id.settings_search);
+        if (searchBox != null) {
+            searchBox.addTextChangedListener(new android.text.TextWatcher() {
+                @Override
+                public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+
+                @Override
+                public void onTextChanged(CharSequence s, int start, int before, int count) {
+                    if (fragment != null) fragment.filterPreferences(s.toString());
+                }
+
+                @Override
+                public void afterTextChanged(android.text.Editable s) {}
+            });
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        android.util.Log.d("SettingsActivity", "onResume");
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        android.util.Log.d("SettingsActivity", "onPause");
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        android.util.Log.d("SettingsActivity", "onDestroy");
     }
 
     @Override
@@ -88,11 +131,7 @@ public class SettingsActivity extends AppCompatActivity {
                 recentDot.setOnPreferenceChangeListener((pref, val) -> true);
             }
 
-            // 列数
-            SeekBarPreference columns = findPreference("column_count");
-            if (columns != null) {
-                columns.setOnPreferenceChangeListener((pref, val) -> true);
-            }
+            // 列数（SeekBar 已被 ListPreference 替代）
 
             // 主题
             ListPreference theme = findPreference("theme_mode");
@@ -112,6 +151,24 @@ public class SettingsActivity extends AppCompatActivity {
                 keyGesture.setOnPreferenceChangeListener((pref, val) -> true);
             }
 
+            // 列数设置
+            ListPreference columnCount = findPreference("column_count");
+            if (columnCount != null) {
+                columnCount.setOnPreferenceChangeListener((pref, val) -> {
+                    int count = Integer.parseInt(val.toString());
+                    if (getActivity() instanceof MainActivity) {
+                        ((MainActivity) getActivity()).setColumnCount(count);
+                    }
+                    return true;
+                });
+            }
+
+            // 最近更新范围
+            ListPreference recentTime = findPreference("recent_time_range");
+            if (recentTime != null) {
+                recentTime.setOnPreferenceChangeListener((pref, val) -> true);
+            }
+
             // 导入/导出配置
             Preference importExport = findPreference("import_export_config");
             if (importExport != null) {
@@ -119,6 +176,28 @@ public class SettingsActivity extends AppCompatActivity {
                     showImportExportDialog();
                     return true;
                 });
+            }
+        }
+
+        /** 根据搜索文本过滤设置项（public 供 Activity 调用） */
+        public void filterPreferences(String query) {
+            PreferenceScreen screen = getPreferenceScreen();
+            if (screen == null) return;
+
+            if (query.isEmpty()) {
+                // 显示所有
+                for (int i = 0; i < screen.getPreferenceCount(); i++) {
+                    screen.getPreference(i).setVisible(true);
+                }
+                return;
+            }
+
+            String lower = query.toLowerCase();
+            for (int i = 0; i < screen.getPreferenceCount(); i++) {
+                Preference pref = screen.getPreference(i);
+                boolean match = pref.getTitle() != null && pref.getTitle().toString().toLowerCase().contains(lower)
+                        || pref.getSummary() != null && pref.getSummary().toString().toLowerCase().contains(lower);
+                pref.setVisible(match);
             }
         }
 

@@ -12,14 +12,13 @@
             android:entries="@array/theme_entries"
             android:entryValues="@array/theme_values" />
 
-        <SeekBarPreference
-            android:key="column_count"
+        <ListPreference
+            android:key="columns"
             android:title="列表列数"
             android:summary="设置应用列表的列数"
             android:defaultValue="3"
-            android:min="2"
-            android:max="5"
-            app:showSeekBarValue="true" />
+            android:entries="@array/column_count_entries"
+            android:entryValues="@array/column_count_values" />
 
         <Preference
             android:key="font_color"
@@ -57,7 +56,7 @@
             android:key="recent_time_range"
             android:title="最近更新范围"
             android:summary="设置多长时间内更新的应用显示圆点"
-            android:defaultValue="604800000"
+            android:defaultValue="432000000"
             android:entries="@array/recent_time_entries"
             android:entryValues="@array/recent_time_values" />
 
