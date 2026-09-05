@@ -22,7 +22,7 @@
         android:layout_weight="1"
         android:layout_marginStart="14dp"
         android:textSize="16sp"
-        android:textColor="#222222"
+        android:textColor="@color/app_name_text"
         android:singleLine="true"
         android:ellipsize="end" />
 </LinearLayout>

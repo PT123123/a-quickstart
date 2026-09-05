@@ -7,5 +7,6 @@
     <color name="t9_key_text">#FFFFFF</color>
     <color name="t9_key_letter">#AAAAAA</color>
     <color name="t9_key_bg">#2C2C2C</color>
+    <color name="keypad_bg">#1A1A1A</color>
     <color name="t9_display_bg">#1E1E1E</color>
 </resources>
