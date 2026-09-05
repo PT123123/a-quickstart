@@ -35,4 +35,7 @@ dependencies {
 
     // TinyPinyin: lightweight Chinese-to-pinyin library
     implementation 'com.github.promeg:tinypinyin:2.0.3'
+
+    // Preference
+    implementation 'androidx.preference:preference:1.2.1'
 }

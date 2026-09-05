@@ -42,6 +42,14 @@ public final class AppLoader {
             } catch (Throwable ignored) {
                 entry.icon = pm.getDefaultActivityIcon();
             }
+            // 标记最近 7 天内更新的应用
+            try {
+                long lastUpdate = pm.getPackageInfo(pkg, 0).lastUpdateTime;
+                long daysSinceUpdate = (System.currentTimeMillis() - lastUpdate) / (1000 * 60 * 60 * 24);
+                entry.recentlyUpdated = daysSinceUpdate <= 7;
+            } catch (Throwable ignored) {
+                entry.recentlyUpdated = false;
+            }
             out.add(entry);
         }
         return out;

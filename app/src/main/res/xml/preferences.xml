@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <PreferenceCategory android:title="显示设置">
+
+        <ListPreference
+            android:key="theme_mode"
+            android:title="主题模式"
+            android:summary="选择深色/浅色主题"
+            android:defaultValue="follow_system"
+            android:entries="@array/theme_entries"
+            android:entryValues="@array/theme_values" />
+
+        <SeekBarPreference
+            android:key="column_count"
+            android:title="列表列数"
+            android:summary="设置应用列表的列数"
+            android:defaultValue="3"
+            android:min="2"
+            android:max="5"
+            app:showSeekBarValue="true" />
+
+        <Preference
+            android:key="font_color"
+            android:title="字体颜色"
+            android:summary="点击切换应用名称字体颜色" />
+
+        <Preference
+            android:key="background_color"
+            android:title="背景颜色"
+            android:summary="点击切换主界面背景颜色" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="窗口设置">
+
+        <ListPreference
+            android:key="window_size"
+            android:title="窗口大小"
+            android:summary="设置应用窗口大小"
+            android:defaultValue="full"
+            android:entries="@array/window_size_entries"
+            android:entryValues="@array/window_size_values" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="功能开关">
+
+        <SwitchPreferenceCompat
+            android:key="recent_app_dot"
+            android:title="最近更新圆点"
+            android:summary="在最近更新的应用图标上显示圆点提示"
+            android:defaultValue="true" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="键盘快捷应用">
+
+        <Preference
+            android:key="key_gesture_binding"
+            android:title="按键手势绑定"
+            android:summary="为每个数字键绑定快捷应用（长按/上滑启动）" />
+
+    </PreferenceCategory>
+
+</PreferenceScreen>

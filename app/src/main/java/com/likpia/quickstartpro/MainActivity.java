@@ -1,12 +1,14 @@
 package com.likpia.quickstartpro;
 
 import android.content.Intent;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.LinearLayout;
 import android.widget.PopupMenu;
 import android.widget.TextView;
@@ -49,6 +51,9 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        applyWindowSize();
+        applyBackgroundColor();
+        applyFontColor();
 
         sortLabel  = findViewById(R.id.sort_label);
         t9Hint     = findViewById(R.id.t9_hint);
@@ -65,6 +70,11 @@ public class MainActivity extends AppCompatActivity {
         recycler.setLayoutManager(new GridLayoutManager(this, columnCount));
         recycler.setAdapter(adapter);
 
+        // 应用设置
+        boolean showDot = getSharedPreferences("settings", MODE_PRIVATE)
+                .getBoolean("recent_app_dot", true);
+        adapter.setShowRecentDot(showDot);
+
         sortLabel.setOnClickListener(v -> showSortMenu());
         findViewById(R.id.btn_clear_top).setOnClickListener(v -> clearQuery());
 
@@ -79,11 +89,57 @@ public class MainActivity extends AppCompatActivity {
                         R.id.key_6, R.id.key_7, R.id.key_8, R.id.key_9};
         for (int i = 0; i < keyIds.length; i++) {
             int digit = i + 1;
-            keypad.findViewById(keyIds[i]).setOnClickListener(v -> onDigitPressed(digit));
+            View key = keypad.findViewById(keyIds[i]);
+            key.setOnClickListener(v -> onDigitPressed(digit));
+            key.setOnLongClickListener(v -> { onKeyLongPress(digit); return true; });
         }
-        keypad.findViewById(R.id.key_0).setOnClickListener(v -> onDigitPressed(0));
+        View key0 = keypad.findViewById(R.id.key_0);
+        key0.setOnClickListener(v -> onDigitPressed(0));
+        key0.setOnLongClickListener(v -> { onKeyLongPress(0); return true; });
         keypad.findViewById(R.id.key_clear).setOnClickListener(v -> clearQuery());
         keypad.findViewById(R.id.key_back).setOnClickListener(v -> onBackspace());
+    }
+
+    /** 长按数字键：如果已绑定应用则启动，否则弹出绑定选择 */
+    private void onKeyLongPress(int digit) {
+        String boundPkg = getSharedPreferences("settings", MODE_PRIVATE)
+                .getString("key_bind_" + digit, "");
+        if (!boundPkg.isEmpty()) {
+            // 启动绑定的应用
+            try {
+                Intent intent = getPackageManager().getLaunchIntentForPackage(boundPkg);
+                if (intent != null) {
+                    startActivity(intent);
+                    return;
+                }
+            } catch (Throwable ignored) {}
+        }
+        // 未绑定 → 弹出选择器
+        showKeyBindDialog(digit);
+    }
+
+    /** 显示数字键绑定应用选择对话框 */
+    private void showKeyBindDialog(int digit) {
+        if (allApps.isEmpty()) return;
+        String[] labels = new String[allApps.size() + 1];
+        labels[0] = "（清除绑定）";
+        for (int i = 0; i < allApps.size(); i++) labels[i + 1] = allApps.get(i).label;
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("长按数字 " + digit + " 绑定应用")
+                .setItems(labels, (dialog, which) -> {
+                    if (which == 0) {
+                        getSharedPreferences("settings", MODE_PRIVATE)
+                                .edit().remove("key_bind_" + digit).apply();
+                        Toast.makeText(this, "已清除绑定", Toast.LENGTH_SHORT).show();
+                    } else {
+                        AppEntry e = allApps.get(which - 1);
+                        getSharedPreferences("settings", MODE_PRIVATE)
+                                .edit().putString("key_bind_" + digit, e.packageName).apply();
+                        Toast.makeText(this, "已绑定 " + e.label, Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     private void onDigitPressed(int digit) {
@@ -237,6 +293,7 @@ public class MainActivity extends AppCompatActivity {
         popup.getMenu().add(0, 4, 3, "使用频率");
         popup.getMenu().add(0, 5, 4, "切换主题");
         popup.getMenu().add(0, 6, 5, "设置列数");
+        popup.getMenu().add(0, 7, 6, "更多设置");
         popup.setOnMenuItemClickListener(item -> {
             String[] labels = {"", "智能排序", "最近安装", "字母顺序", "使用频率"};
             if (item.getItemId() >= 1 && item.getItemId() <= 4) {
@@ -249,6 +306,10 @@ public class MainActivity extends AppCompatActivity {
             }
             if (item.getItemId() == 6) {
                 showColumnCountDialog();
+                return true;
+            }
+            if (item.getItemId() == 7) {
+                startActivity(new Intent(MainActivity.this, SettingsActivity.class));
                 return true;
             }
             return false;
@@ -301,6 +362,49 @@ public class MainActivity extends AppCompatActivity {
                 })
                 .setNegativeButton("取消", null)
                 .show();
+    }
+
+    /** 应用窗口大小设置 */
+    private void applyWindowSize() {
+        String size = getSharedPreferences("settings", MODE_PRIVATE)
+                .getString("window_size", "full");
+        if (!"full".equals(size)) {
+            WindowManager.LayoutParams params = getWindow().getAttributes();
+            int w, h;
+            if ("small".equals(size)) {
+                w = (int) (getResources().getDisplayMetrics().widthPixels * 0.5);
+                h = (int) (getResources().getDisplayMetrics().heightPixels * 0.5);
+            } else { // medium
+                w = (int) (getResources().getDisplayMetrics().widthPixels * 0.75);
+                h = (int) (getResources().getDisplayMetrics().heightPixels * 0.75);
+            }
+            params.width = w;
+            params.height = h;
+            params.gravity = android.view.Gravity.CENTER;
+            getWindow().setAttributes(params);
+        }
+    }
+
+    /** 应用背景颜色 */
+    private void applyBackgroundColor() {
+        String color = getSharedPreferences("settings", MODE_PRIVATE)
+                .getString("background_color", "");
+        if (!color.isEmpty()) {
+            try {
+                findViewById(R.id.app_list).setBackgroundColor(Color.parseColor(color));
+            } catch (Exception ignored) {}
+        }
+    }
+
+    /** 应用字体颜色 */
+    private void applyFontColor() {
+        String color = getSharedPreferences("settings", MODE_PRIVATE)
+                .getString("font_color", "");
+        if (!color.isEmpty()) {
+            try {
+                adapter.setFontColor(Color.parseColor(color));
+            } catch (Exception ignored) {}
+        }
     }
 
     private void setupCategoryChips() {

@@ -20,6 +20,12 @@
             </intent-filter>
         </activity>
 
+        <!-- 设置界面 -->
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:label="设置" />
+
         <!-- 广告跳过无障碍服务 -->
         <service
             android:name=".service.AdSkipAccessibilityService"
