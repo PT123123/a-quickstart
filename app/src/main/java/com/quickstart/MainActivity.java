@@ -95,24 +95,20 @@ public class MainActivity extends AppCompatActivity {
         adapter.setShowRecentDot(showDot);
 
         sortLabel.setOnClickListener(v -> showSortMenu());
-        // ✕ 单击=删除一位，长按=清空
-        View btnClear = findViewById(R.id.btn_clear_top);
-        btnClear.setOnClickListener(v -> onBackspace());
-        btnClear.setOnLongClickListener(v -> { clearQuery(); return true; });
 
         // ⚙ 设置按钮
         findViewById(R.id.btn_settings_top).setOnClickListener(v ->
                 startActivity(new Intent(this, SettingsActivity.class)));
 
-        // ⌄ 收缩/展开键盘
-        View toggleKeypad = findViewById(R.id.btn_toggle_keypad);
+        // ⌄ 收缩/展开键盘（在键盘上方）
+        TextView toggleKeypad = findViewById(R.id.btn_toggle_keypad);
         toggleKeypad.setOnClickListener(v -> {
             if (keypad.getVisibility() == View.VISIBLE) {
                 keypad.setVisibility(View.GONE);
-                ((TextView) v).setText("⌃"); // 展开图标
+                ((TextView) v).setText("⌃");
             } else {
                 keypad.setVisibility(View.VISIBLE);
-                ((TextView) v).setText("⌄"); // 收起图标
+                ((TextView) v).setText("⌄");
             }
         });
 
@@ -291,11 +287,57 @@ public class MainActivity extends AppCompatActivity {
                 boolean matchCat = currentCategory == null || matchCategory(e, currentCategory);
                 if (matchQuery && matchCat) filtered.add(e);
             }
+            // 有搜索词时按权重排序（使用频率 + 最近使用时间）
+            if (!q.isEmpty()) {
+                sortBySearchWeight(filtered, q);
+            }
         }
         adapter.setHighlightQuery(q);
         adapter.submit(filtered);
         emptyHint.setVisibility(filtered.isEmpty() ? View.VISIBLE : View.GONE);
         recycler.setVisibility(filtered.isEmpty() ? View.GONE : View.VISIBLE);
+    }
+
+    /** 搜索权重排序：综合使用频率、最近使用时间、是否精确匹配 */
+    private void sortBySearchWeight(List<AppEntry> list, String query) {
+        long now = System.currentTimeMillis();
+        final long ONE_DAY = 24 * 60 * 60 * 1000L;
+
+        java.util.Collections.sort(list, (a, b) -> {
+            int scoreA = calcSearchScore(a, query, now, ONE_DAY);
+            int scoreB = calcSearchScore(b, query, now, ONE_DAY);
+            return Integer.compare(scoreB, scoreA); // 降序
+        });
+    }
+
+    /** 计算搜索权重分数 */
+    private int calcSearchScore(AppEntry e, String query, long now, long oneDay) {
+        int score = 0;
+
+        // 1. 使用频率权重（最高 100 分）
+        int launchCount = launchCountCache.getOrDefault(e.packageName, 0);
+        score += Math.min(launchCount, 50) * 2; // 最多 100 分
+
+        // 2. 最近使用时间权重（最高 80 分）
+        long lastLaunch = lastLaunchTimeCache.getOrDefault(e.packageName, 0L);
+        if (lastLaunch > 0) {
+            long daysAgo = (now - lastLaunch) / oneDay;
+            if (daysAgo == 0) score += 80;      // 今天使用过
+            else if (daysAgo <= 1) score += 60; // 昨天
+            else if (daysAgo <= 3) score += 40; // 3 天内
+            else if (daysAgo <= 7) score += 20; // 一周内
+        }
+
+        // 3. 精确匹配加分（最高 50 分）
+        String lowerLabel = e.label.toLowerCase();
+        String lowerQuery = query.toLowerCase();
+        if (lowerLabel.startsWith(lowerQuery)) score += 50; // 开头匹配
+        else if (lowerLabel.contains(lowerQuery)) score += 30; // 包含匹配
+
+        // 4. 最近更新加分
+        if (e.recentlyUpdated) score += 10;
+
+        return score;
     }
 
     private boolean matchCategory(AppEntry e, String cat) {
@@ -333,6 +375,10 @@ public class MainActivity extends AppCompatActivity {
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 startActivity(intent);
             }
+            // 启动后清空输入
+            query.setLength(0);
+            t9Display.setText("");
+            t9Hint.setText(buildHint());
         } catch (Throwable t) {
             Toast.makeText(this, "无法启动 " + entry.label, Toast.LENGTH_SHORT).show();
         }
@@ -408,12 +454,16 @@ public class MainActivity extends AppCompatActivity {
     private java.util.Map<String, Long> installTimeCache = new java.util.HashMap<>();
     /** 启动次数缓存 */
     private java.util.Map<String, Integer> launchCountCache = new java.util.HashMap<>();
+    /** 最近启动时间缓存 */
+    private java.util.Map<String, Long> lastLaunchTimeCache = new java.util.HashMap<>();
 
-    /** 预加载安装时间和启动次数到内存缓存（后台线程调用） */
+    /** 预加载排序相关数据到内存缓存（后台线程调用） */
     private void preloadSortData() {
         installTimeCache.clear();
         launchCountCache.clear();
+        lastLaunchTimeCache.clear();
         SharedPreferences countSp = getSharedPreferences("app_launch_count", MODE_PRIVATE);
+        SharedPreferences timeSp = getSharedPreferences("app_launch_time", MODE_PRIVATE);
         for (AppEntry e : allApps) {
             try {
                 installTimeCache.put(e.packageName,
@@ -422,6 +472,7 @@ public class MainActivity extends AppCompatActivity {
                 installTimeCache.put(e.packageName, 0L);
             }
             launchCountCache.put(e.packageName, countSp.getInt(e.packageName, 0));
+            lastLaunchTimeCache.put(e.packageName, timeSp.getLong(e.packageName, 0L));
         }
     }
 
@@ -444,21 +495,30 @@ public class MainActivity extends AppCompatActivity {
                         Integer.compare(launchCountCache.getOrDefault(b.packageName, 0),
                                 launchCountCache.getOrDefault(a.packageName, 0)));
                 break;
-            default: // 智能排序：最近更新的在前，然后按字母
+            default: // 智能排序：启动过的应用按频率降序排前面，未启动的按字母排序
                 java.util.Collections.sort(allApps, (a, b) -> {
-                    if (a.recentlyUpdated != b.recentlyUpdated) return a.recentlyUpdated ? -1 : 1;
-                    return a.label.compareToIgnoreCase(b.label);
+                    int countA = launchCountCache.getOrDefault(a.packageName, 0);
+                    int countB = launchCountCache.getOrDefault(b.packageName, 0);
+                    if (countA > 0 && countB > 0) return Integer.compare(countB, countA); // 都启动过，按频率
+                    if (countA > 0) return -1;  // a 启动过，排前面
+                    if (countB > 0) return 1;   // b 启动过，排前面
+                    return a.label.compareToIgnoreCase(b.label); // 都没启动，按字母
                 });
                 break;
         }
     }
 
-    /** 记录应用启动 */
+    /** 记录应用启动（次数 + 时间） */
     private void recordLaunch(String pkg) {
-        SharedPreferences sp = getSharedPreferences("app_launch_count", MODE_PRIVATE);
-        int count = sp.getInt(pkg, 0) + 1;
-        sp.edit().putInt(pkg, count).apply();
-        launchCountCache.put(pkg, count); // 同步更新缓存
+        SharedPreferences countSp = getSharedPreferences("app_launch_count", MODE_PRIVATE);
+        int count = countSp.getInt(pkg, 0) + 1;
+        countSp.edit().putInt(pkg, count).apply();
+        launchCountCache.put(pkg, count);
+
+        SharedPreferences timeSp = getSharedPreferences("app_launch_time", MODE_PRIVATE);
+        long now = System.currentTimeMillis();
+        timeSp.edit().putLong(pkg, now).apply();
+        lastLaunchTimeCache.put(pkg, now);
     }
 
     /** 排序并刷新列表（仅在排序模式改变时调用） */
@@ -484,14 +544,18 @@ public class MainActivity extends AppCompatActivity {
 
     /** 获取当前列数（默认 3） */
     private int getColumnCount() {
-        return getSharedPreferences("settings", MODE_PRIVATE)
-                .getInt("column_count", 3);
+        // 优先读取新 key（string），兼容旧 key（int）
+        SharedPreferences sp = getSharedPreferences("settings", MODE_PRIVATE);
+        if (sp.contains("columns")) {
+            return Integer.parseInt(sp.getString("columns", "3"));
+        }
+        return sp.getInt("column_count", 3);
     }
 
     /** 设置列数并刷新列表 */
-    private void setColumnCount(int count) {
+    public void setColumnCount(int count) {
         getSharedPreferences("settings", MODE_PRIVATE)
-                .edit().putInt("column_count", count).apply();
+                .edit().putString("columns", String.valueOf(count)).apply();
         GridLayoutManager layoutManager = (GridLayoutManager) recycler.getLayoutManager();
         if (layoutManager != null) {
             layoutManager.setSpanCount(count);

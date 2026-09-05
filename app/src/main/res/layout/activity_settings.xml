@@ -1,6 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/settings_container"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="?android:attr/colorBackground" />
+    android:orientation="vertical"
+    android:background="?android:attr/colorBackground">
+
+    <!-- 搜索框 -->
+    <EditText
+        android:id="@+id/settings_search"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="搜索设置..."
+        android:padding="12dp"
+        android:textSize="14sp"
+        android:background="?attr/colorPrimary"
+        android:textColor="@android:color/white"
+        android:textColorHint="#CCFFFFFF"
+        android:imeOptions="actionSearch"
+        android:inputType="text"
+        android:maxLines="1" />
+
+    <FrameLayout
+        android:id="@+id/settings_container"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+</LinearLayout>

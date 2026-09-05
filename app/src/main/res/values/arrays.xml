@@ -43,4 +43,21 @@
         <item>7200000</item>
         <item>432000000</item>
     </string-array>
+
+    <string-array name="column_count_entries">
+        <item>2 列</item>
+        <item>3 列</item>
+        <item>4 列</item>
+        <item>5 列</item>
+        <item>6 列</item>
+        <item>7 列</item>
+    </string-array>
+    <string-array name="column_count_values">
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+        <item>5</item>
+        <item>6</item>
+        <item>7</item>
+    </string-array>
 </resources>
