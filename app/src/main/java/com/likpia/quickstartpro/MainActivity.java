@@ -105,6 +105,15 @@ public class MainActivity extends AppCompatActivity {
         t9Display.setText(query.toString());
         t9Hint.setText(buildHint());
         doFilter();
+        // 唯一匹配时自动启动
+        maybeAutoLaunch();
+    }
+
+    /** 当输入匹配到唯一一个应用时，自动启动 */
+    private void maybeAutoLaunch() {
+        if (filtered.size() == 1 && query.length() > 0) {
+            launchApp(filtered.get(0));
+        }
     }
 
     private String buildHint() {
@@ -224,15 +233,32 @@ public class MainActivity extends AppCompatActivity {
         popup.getMenu().add(0, 2, 1, "最近安装");
         popup.getMenu().add(0, 3, 2, "字母顺序");
         popup.getMenu().add(0, 4, 3, "使用频率");
+        popup.getMenu().add(0, 5, 4, "切换主题");
         popup.setOnMenuItemClickListener(item -> {
             String[] labels = {"", "智能排序", "最近安装", "字母顺序", "使用频率"};
             if (item.getItemId() >= 1 && item.getItemId() <= 4) {
                 sortLabel.setText(labels[item.getItemId()]);
                 return true;
             }
+            if (item.getItemId() == 5) {
+                toggleTheme();
+                return true;
+            }
             return false;
         });
         popup.show();
+    }
+
+    /** 切换深色/浅色主题 */
+    private void toggleTheme() {
+        int current = androidx.appcompat.app.AppCompatDelegate.getDefaultNightMode();
+        if (current == androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES) {
+            androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(
+                    androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO);
+        } else {
+            androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(
+                    androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES);
+        }
     }
 
     private void setupCategoryChips() {
