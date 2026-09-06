@@ -111,6 +111,24 @@
             android:clipToPadding="false"
             android:paddingBottom="8dp" />
 
+        <!-- 悬浮吸顶标签栏（滚动时显示） -->
+        <HorizontalScrollView
+            android:id="@+id/sticky_category_bar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="?attr/colorPrimary"
+            android:scrollbars="none"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:id="@+id/sticky_category_chips"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="8dp" />
+        </HorizontalScrollView>
+
         <!-- 启动加载提示 -->
         <LinearLayout
             android:id="@+id/loading_overlay"
