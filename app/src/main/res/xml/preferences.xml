@@ -52,6 +52,12 @@
             android:summary="在最近更新的应用图标上显示圆点提示"
             android:defaultValue="true" />
 
+        <SwitchPreferenceCompat
+            android:key="pull_down_hover"
+            android:title="下拉悬停"
+            android:summary="在应用列表顶部快速向下滑动，列表下移让顶部应用到达下半屏，方便单手操作"
+            android:defaultValue="true" />
+
         <ListPreference
             android:key="recent_time_range"
             android:title="最近更新范围"
