@@ -90,12 +90,9 @@ public final class AppLoader {
             } catch (Throwable ignored) {}
         }
 
-        // 微信扫一扫
+        // 微信扫一扫（T9 指纹由 buildFingerprints 从标签自动生成：全拼/首字母/原始字母）
         AppEntry scanEntry = new AppEntry("微信扫一扫", wechatPkg, "",
                 T9Matcher.buildFingerprints("微信扫一扫"));
-        // 添加拼音指纹以便 T9 搜索（wxss -> 9977）
-        scanEntry.fingerprints.add("9977"); // wxss
-        scanEntry.fingerprints.add("96799"); // weixinsao
         scanEntry.icon = wechatIcon;
         scanEntry.recentlyUpdated = false;
         // 微信扫一扫的启动 Intent
@@ -107,12 +104,9 @@ public final class AppLoader {
         } catch (Throwable ignored) {}
         out.add(scanEntry);
 
-        // 微信付款码
+        // 微信付款码（T9 指纹由 buildFingerprints 从标签自动生成：全拼/首字母/原始字母）
         AppEntry payEntry = new AppEntry("微信付款码", wechatPkg, "",
                 T9Matcher.buildFingerprints("微信付款码"));
-        // 添加拼音指纹（wxfkm -> 993566）
-        payEntry.fingerprints.add("993566"); // wxfkm
-        payEntry.fingerprints.add("96436"); // weixinfukuan
         payEntry.icon = wechatIcon;
         payEntry.recentlyUpdated = false;
         // 微信付款码的启动 Intent

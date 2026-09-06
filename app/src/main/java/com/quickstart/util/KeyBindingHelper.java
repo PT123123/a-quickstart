@@ -39,35 +39,11 @@ public final class KeyBindingHelper {
                 .getString("key_bind_" + digit, null);
     }
 
-    /** 获取全局手势类型，默认 long_press */
-    public static String getGlobalGesture(Context ctx) {
-        return ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .getString("key_gesture", "long_press");
-    }
-
-    /** 获取数字键的手势类型（用于数字键启动），默认 long_press */
-    public static String getGesture(Context ctx, int digit) {
-        return ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .getString("key_gesture_" + digit, "long_press");
-    }
-
-    /** 获取搜索列表角标的手势类型（与数字键手势相反） */
-    public static String getBadgeGesture(Context ctx) {
-        String keyGesture = getGlobalGesture(ctx);
-        return "long_press".equals(keyGesture) ? "swipe_up" : "long_press";
-    }
-
-    /** 判断数字键是否用长按启动 */
-    public static boolean isKeyLaunchLongPress(Context ctx) {
-        return "long_press".equals(getGlobalGesture(ctx));
-    }
-
     /** 绑定应用到数字键 */
     public static void bind(Context ctx, int digit, String pkg) {
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit()
                 .putString("key_bind_" + digit, pkg)
-                .putString("key_gesture_" + digit, "long_press")
                 .apply();
     }
 
@@ -76,15 +52,7 @@ public final class KeyBindingHelper {
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit()
                 .remove("key_bind_" + digit)
-                .remove("key_gesture_" + digit)
-                .apply();
-    }
-
-    /** 设置数字键手势类型 */
-    public static void setGesture(Context ctx, int digit, String gesture) {
-        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit()
-                .putString("key_gesture_" + digit, gesture)
+                .remove("key_gesture_" + digit) // 顺带清理旧版本遗留的 per-key 手势数据
                 .apply();
     }
 }

@@ -84,6 +84,7 @@
                 android:orientation="horizontal">
 
                 <TextView style="@style/CategoryChip" android:text="最近搜索" />
+                <TextView style="@style/CategoryChip" android:text="最近使用" />
                 <TextView style="@style/CategoryChip" android:text="最近安装" />
                 <TextView style="@style/CategoryChip" android:text="社交" />
                 <TextView style="@style/CategoryChip" android:text="影音" />

@@ -6,6 +6,8 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.LayoutInflater;
 import android.view.MenuItem;
 import android.view.View;
@@ -40,6 +42,7 @@ public class KeyBindingActivity extends AppCompatActivity {
     private RecyclerView recycler;
     private BindingAdapter adapter;
     private final ExecutorService io = Executors.newSingleThreadExecutor();
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -85,11 +88,20 @@ public class KeyBindingActivity extends AppCompatActivity {
                         android.R.layout.simple_list_item_1, getLabels(filteredApps));
                 listView.setAdapter(adapter);
 
+                final Runnable[] pendingFilter = {null};
+
                 AlertDialog dialog = new AlertDialog.Builder(this)
                         .setTitle("为按键 " + digit + " 选择应用")
                         .setView(view)
                         .setNegativeButton("取消", null)
                         .create();
+
+                // 对话框关闭时清掉未触发的防抖任务
+                dialog.setOnDismissListener(d -> {
+                    if (pendingFilter[0] != null) {
+                        mainHandler.removeCallbacks(pendingFilter[0]);
+                    }
+                });
 
                 // 点击选中应用
                 listView.setOnItemClickListener((parent, v, position, id) -> {
@@ -101,14 +113,19 @@ public class KeyBindingActivity extends AppCompatActivity {
                     loadBindings();
                 });
 
-                // 搜索过滤
+                // 搜索过滤（200ms 防抖，避免每敲一个字符都全量重建列表）
                 searchBox.addTextChangedListener(new android.text.TextWatcher() {
                     @Override
                     public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
 
                     @Override
                     public void onTextChanged(CharSequence s, int start, int before, int count) {
-                        filterApps(apps, s.toString(), filteredApps, adapter);
+                        if (pendingFilter[0] != null) {
+                            mainHandler.removeCallbacks(pendingFilter[0]);
+                        }
+                        pendingFilter[0] = () -> filterApps(apps,
+                                searchBox.getText().toString(), filteredApps, adapter);
+                        mainHandler.postDelayed(pendingFilter[0], 200);
                     }
 
                     @Override
@@ -200,6 +217,7 @@ public class KeyBindingActivity extends AppCompatActivity {
         @Override
         public void onBindViewHolder(@NonNull VH holder, int position) {
             BindingItem item = items.get(position);
+            holder.boundPkg = item.packageName; // 供异步回调校验 holder 是否仍绑定该应用
             holder.digit.setText(String.valueOf(item.digit));
 
             if (item.packageName != null && !item.packageName.isEmpty()) {
@@ -231,13 +249,18 @@ public class KeyBindingActivity extends AppCompatActivity {
                     String label = pm.getApplicationLabel(ai).toString();
                     Drawable icon = pm.getApplicationIcon(ai);
                     runOnUiThread(() -> {
-                        holder.appName.setText(label);
-                        holder.appIcon.setImageDrawable(icon);
+                        // holder 可能已被复用到其它条目，包名不一致时丢弃这次回调
+                        if (item.packageName.equals(holder.boundPkg)) {
+                            holder.appName.setText(label);
+                            holder.appIcon.setImageDrawable(icon);
+                        }
                     });
                 } catch (PackageManager.NameNotFoundException e) {
                     runOnUiThread(() -> {
-                        holder.appName.setText(item.packageName + " (已卸载)");
-                        holder.appIcon.setImageResource(android.R.drawable.sym_def_app_icon);
+                        if (item.packageName.equals(holder.boundPkg)) {
+                            holder.appName.setText(item.packageName + " (已卸载)");
+                            holder.appIcon.setImageResource(android.R.drawable.sym_def_app_icon);
+                        }
                     });
                 }
             });
@@ -253,6 +276,7 @@ public class KeyBindingActivity extends AppCompatActivity {
             ImageView appIcon;
             TextView appName;
             TextView gesture;
+            String boundPkg;
 
             VH(@NonNull View itemView) {
                 super(itemView);
