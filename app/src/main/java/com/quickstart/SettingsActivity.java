@@ -194,11 +194,21 @@ public class SettingsActivity extends AppCompatActivity {
 
         /** 显示导入/导出配置对话框 */
         private void showImportExportDialog() {
-            String[] options = {"导出配置到剪贴板", "从剪贴板导入配置"};
+            String[] options = {
+                    "扫码传送给新设备（本机显示二维码）",
+                    "扫码接收其他设备的配置（打开相机）",
+                    "导出全部配置到剪贴板",
+                    "从剪贴板导入配置"};
             new androidx.appcompat.app.AlertDialog.Builder(requireContext())
                     .setTitle("导入/导出配置")
                     .setItems(options, (dialog, which) -> {
-                        if (which == 0) {
+                        if (which == 0 || which == 1) {
+                            Intent intent = new Intent(requireContext(), QrTransferActivity.class);
+                            intent.putExtra(QrTransferActivity.EXTRA_MODE,
+                                    which == 0 ? QrTransferActivity.MODE_SEND
+                                               : QrTransferActivity.MODE_RECEIVE);
+                            startActivity(intent);
+                        } else if (which == 2) {
                             exportConfig();
                         } else {
                             importConfig();
@@ -208,29 +218,19 @@ public class SettingsActivity extends AppCompatActivity {
                     .show();
         }
 
-        /** 导出配置到剪贴板 */
+        /** 导出全部配置到剪贴板（与二维码传送共用同一份序列化） */
         private void exportConfig() {
             try {
-                org.json.JSONObject json = new org.json.JSONObject();
-                SharedPreferences sp = getPreferenceManager().getSharedPreferences();
-                // 导出所有设置
-                json.put("sort_mode", sp.getString("sort_mode", "智能排序"));
-                json.put("key_gesture", sp.getString("key_gesture", "long_press"));
-                json.put("theme_mode", sp.getString("theme_mode", "follow_system"));
-                json.put("window_size", sp.getString("window_size", "full"));
-                json.put("column_count", sp.getInt("column_count", 3));
-                json.put("recent_app_dot", sp.getBoolean("recent_app_dot", true));
-                json.put("background_color", sp.getString("background_color", ""));
-                json.put("font_color", sp.getString("font_color", ""));
-
-                String jsonStr = json.toString(2); // 格式化缩进
+                String jsonStr = com.quickstart.util.ConfigTransfer.buildConfigJson(requireContext());
+                int count = new org.json.JSONObject(jsonStr).length();
 
                 android.content.ClipboardManager clipboard =
                         (android.content.ClipboardManager) requireContext()
                                 .getSystemService(android.content.Context.CLIPBOARD_SERVICE);
                 clipboard.setPrimaryClip(android.content.ClipData.newPlainText("config", jsonStr));
 
-                Toast.makeText(requireContext(), "配置已导出到剪贴板", Toast.LENGTH_SHORT).show();
+                Toast.makeText(requireContext(),
+                        "已导出全部配置（" + count + " 项）到剪贴板", Toast.LENGTH_SHORT).show();
             } catch (Throwable t) {
                 Toast.makeText(requireContext(), "导出失败: " + t.getMessage(), Toast.LENGTH_SHORT).show();
             }
@@ -248,20 +248,10 @@ public class SettingsActivity extends AppCompatActivity {
                     return;
                 }
                 String text = clipboard.getPrimaryClip().getItemAt(0).getText().toString();
-                org.json.JSONObject json = new org.json.JSONObject(text);
+                int n = com.quickstart.util.ConfigTransfer.applyConfigJson(requireContext(), text);
 
-                SharedPreferences.Editor editor = getPreferenceManager().getSharedPreferences().edit();
-                if (json.has("sort_mode")) editor.putString("sort_mode", json.getString("sort_mode"));
-                if (json.has("key_gesture")) editor.putString("key_gesture", json.getString("key_gesture"));
-                if (json.has("theme_mode")) editor.putString("theme_mode", json.getString("theme_mode"));
-                if (json.has("window_size")) editor.putString("window_size", json.getString("window_size"));
-                if (json.has("column_count")) editor.putInt("column_count", json.getInt("column_count"));
-                if (json.has("recent_app_dot")) editor.putBoolean("recent_app_dot", json.getBoolean("recent_app_dot"));
-                if (json.has("background_color")) editor.putString("background_color", json.getString("background_color"));
-                if (json.has("font_color")) editor.putString("font_color", json.getString("font_color"));
-                editor.apply();
-
-                Toast.makeText(requireContext(), "配置已导入，重启应用生效", Toast.LENGTH_LONG).show();
+                Toast.makeText(requireContext(),
+                        "已导入 " + n + " 项配置，重启应用生效", Toast.LENGTH_LONG).show();
             } catch (Throwable t) {
                 Toast.makeText(requireContext(), "导入失败: " + t.getMessage(), Toast.LENGTH_SHORT).show();
             }

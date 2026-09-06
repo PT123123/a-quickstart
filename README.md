@@ -31,6 +31,7 @@
 - 最近更新圆点提示
 
 ### 其他
+- **二维码配置传送**：设置 → 导入/导出配置 → 扫码传送/扫码接收。一台手机分帧轮播二维码，另一台相机连续扫码，收齐校验后一键导入，全程无需联网；剪贴板导出/导入与二维码共用同一份全量配置（含界面设置、数字键绑定、隐藏应用）
 - 定时刷新应用列表（30 分钟间隔）
 - 分类筛选（最近搜索 / 最近使用 / 最近安装 / 社交 / 影音 / 交通出行 / 实用工具 / 游戏 / 购物 / 理财）
   - **最近搜索**：按时间倒序列出通过 T9 搜索启动过的应用，长按该 chip 可清空历史
@@ -47,6 +48,7 @@
   - AndroidX AppCompat / RecyclerView / Preference
   - Material Components
   - [TinyPinyin](https://github.com/promeG/TinyPinyin) — 轻量汉字转拼音库
+  - [ZXing core](https://github.com/zxing/zxing) — 二维码生成与解码（配置扫码传送）
 
 ## 参考项目
 
@@ -70,6 +72,7 @@ app/src/main/
 ├── java/com/quickstart/
 │   ├── MainActivity.java          # 主界面（T9键盘、搜索、列表）
 │   ├── SettingsActivity.java      # 设置页面
+│   ├── QrTransferActivity.java    # 二维码配置传送（发送/接收）
 │   ├── HiddenAppsActivity.java    # 已隐藏应用管理
 │   ├── KeyBindingActivity.java    # 数字键绑定管理
 │   ├── adapter/
@@ -82,7 +85,8 @@ app/src/main/
 │   │   ├── AppCache.java          # JSON 缓存
 │   │   ├── FastCache.java         # 二进制缓存
 │   │   ├── IconCache.java         # 图标缓存
-│   │   └── KeyBindingHelper.java  # 按键绑定工具
+│   │   ├── KeyBindingHelper.java  # 按键绑定工具
+│   │   └── ConfigTransfer.java    # 配置全量导出/导入 + 二维码分帧协议
 │   └── service/
 │       └── AdSkipAccessibilityService.java  # 广告跳过服务
 └── res/

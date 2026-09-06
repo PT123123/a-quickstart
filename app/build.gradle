@@ -36,6 +36,9 @@ dependencies {
     // TinyPinyin: lightweight Chinese-to-pinyin library
     implementation 'com.github.promeg:tinypinyin:2.0.3'
 
+    // ZXing core: QR code generation & decoding (pure Java, no camera code)
+    implementation 'com.google.zxing:core:3.5.3'
+
     // Preference
     implementation 'androidx.preference:preference:1.2.1'
 }
