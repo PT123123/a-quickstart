@@ -13,7 +13,6 @@ import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
-import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.PopupMenu;
@@ -57,8 +56,10 @@ public class MainActivity extends AppCompatActivity {
             "最近搜索", "最近使用", "最近安装", "社交", "影音",
             "交通出行", "实用工具", "游戏", "购物", "理财"
     };
-    /** 悬浮吸顶标签栏的滚动阈值（px） */
-    private static final int STICKY_BAR_SCROLL_THRESHOLD = 200;
+    /** 下拉悬停功能的滚动偏移量（让顶部应用移到下半屏） */
+    private static final int PULL_DOWN_HOVER_OFFSET = 600;
+    /** 下拉悬停是否触发 */
+    private boolean pullDownHoverActive = false;
 
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -125,7 +126,7 @@ public class MainActivity extends AppCompatActivity {
         setupKeypad();
         setupCategoryChips();
         setupSwipeToSwitchCategory();
-        setupStickyCategoryBar();
+        setupPullDownHover();
         loadAppsAsync();
     }
 
@@ -831,7 +832,6 @@ public class MainActivity extends AppCompatActivity {
                     v.setSelected(true);
                     currentCategory = ((TextView) v).getText().toString();
                 }
-                updateStickyBarSelection();
                 doFilter();
             });
             // 长按「最近搜索」chip：清空搜索历史
@@ -933,76 +933,67 @@ public class MainActivity extends AppCompatActivity {
             View chip = ((LinearLayout) chipContainer).getChildAt(i);
             chip.setSelected(category.equals(((TextView) chip).getText().toString()));
         }
-        // 更新悬浮标签栏选中状态
-        updateStickyBarSelection();
         doFilter();
     }
 
     /**
-     * 设置悬浮吸顶标签栏：
-     * 复制主标签栏的结构，监听 RecyclerView 滚动，超过阈值时显示，回到顶部时隐藏。
+     * 设置下拉悬停功能：
+     * 当用户在应用列表顶部快速从上往下滑动时，列表内容向下偏移悬停，
+     * 使顶部的应用移到下半屏，方便单手操作。
+     * 再次下拉或上推可恢复正常位置。
      */
-    private void setupStickyCategoryBar() {
-        LinearLayout stickyChips = findViewById(R.id.sticky_category_chips);
-        View mainBar = findViewById(R.id.category_bar);
+    private void setupPullDownHover() {
+        // 读取设置
+        boolean enabled = getSharedPreferences("settings", MODE_PRIVATE)
+                .getBoolean("pull_down_hover", true);
+        if (!enabled) return;
 
-        // 复制主标签栏的 chip 到悬浮栏
-        for (int i = 0; i < ((LinearLayout) mainBar).getChildCount(); i++) {
-            View mainChip = ((LinearLayout) mainBar).getChildAt(i);
-            TextView stickyChip = new TextView(this);
-            // 复制文字和样式属性
-            stickyChip.setText(((TextView) mainChip).getText());
-            stickyChip.setTextColor(getResources().getColorStateList(R.color.category_chip_text, null));
-            stickyChip.setTextSize(12f);
-            stickyChip.setGravity(android.view.Gravity.CENTER);
-            stickyChip.setBackgroundResource(R.drawable.bg_category_chip);
-            stickyChip.setClickable(true);
-            stickyChip.setFocusable(true);
-            // 设置内边距（与 CategoryChip 样式一致）
-            int paddingH = (int) (12 * getResources().getDisplayMetrics().density);
-            int paddingV = (int) (7 * getResources().getDisplayMetrics().density);
-            stickyChip.setPadding(paddingH, paddingV, paddingH, paddingV);
-            // 设置布局参数（高度 28dp，右边距 6dp）
-            int height = (int) (28 * getResources().getDisplayMetrics().density);
-            int margin = (int) (6 * getResources().getDisplayMetrics().density);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT, height);
-            lp.setMargins(0, 0, margin, 0);
-            stickyChip.setLayoutParams(lp);
-            stickyChip.setSelected(mainChip.isSelected());
+        GestureDetector pullDownDetector = new GestureDetector(this,
+                new GestureDetector.SimpleOnGestureListener() {
+                    private static final int PULL_DOWN_THRESHOLD = 100;
+                    private static final int PULL_DOWN_VELOCITY_THRESHOLD = 200;
 
-            // 点击事件：同步到主标签栏
-            final String category = ((TextView) mainChip).getText().toString();
-            stickyChip.setOnClickListener(v -> applyCategory(category));
+                    @Override
+                    public boolean onFling(MotionEvent e1, MotionEvent e2,
+                                           float velocityX, float velocityY) {
+                        if (e1 == null || e2 == null) return false;
+                        float dy = e2.getY() - e1.getY();
+                        // 快速下拉：向下位移足够且向下的速度足够
+                        if (dy > PULL_DOWN_THRESHOLD
+                                && velocityY > PULL_DOWN_VELOCITY_THRESHOLD) {
+                            triggerPullDownHover();
+                            return true;
+                        }
+                        return false;
+                    }
+                });
 
-            stickyChips.addView(stickyChip);
-        }
-
-        // 监听滚动，控制悬浮栏显示/隐藏
-        recycler.addOnScrollListener(new RecyclerView.OnScrollListener() {
+        recycler.addOnItemTouchListener(new RecyclerView.OnItemTouchListener() {
             @Override
-            public void onScrolled(RecyclerView recyclerView, int dx, int dy) {
-                int scrollOffset = recyclerView.computeVerticalScrollOffset();
-                HorizontalScrollView stickyBar = findViewById(R.id.sticky_category_bar);
-                if (scrollOffset > STICKY_BAR_SCROLL_THRESHOLD) {
-                    stickyBar.setVisibility(View.VISIBLE);
-                } else {
-                    stickyBar.setVisibility(View.GONE);
-                }
+            public boolean onInterceptTouchEvent(RecyclerView rv, MotionEvent e) {
+                pullDownDetector.onTouchEvent(e);
+                return false;
             }
+
+            @Override
+            public void onTouchEvent(RecyclerView rv, MotionEvent e) {
+                pullDownDetector.onTouchEvent(e);
+            }
+
+            @Override
+            public void onRequestDisallowInterceptTouchEvent(boolean disallowIntercept) {}
         });
     }
 
-    /** 更新悬浮标签栏的选中状态 */
-    private void updateStickyBarSelection() {
-        LinearLayout stickyChips = findViewById(R.id.sticky_category_chips);
-        if (stickyChips == null) return;
-        for (int i = 0; i < stickyChips.getChildCount(); i++) {
-            View chip = stickyChips.getChildAt(i);
-            if (chip instanceof TextView) {
-                chip.setSelected(currentCategory != null
-                        && currentCategory.equals(((TextView) chip).getText().toString()));
-            }
+    /** 触发下拉悬停：切换悬停状态 */
+    private void triggerPullDownHover() {
+        pullDownHoverActive = !pullDownHoverActive;
+        if (pullDownHoverActive) {
+            // 向下滚动偏移，让顶部应用移到下半屏
+            recycler.smoothScrollBy(0, PULL_DOWN_HOVER_OFFSET);
+        } else {
+            // 恢复原位
+            recycler.smoothScrollToPosition(0);
         }
     }
 
