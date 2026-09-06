@@ -40,7 +40,7 @@ import java.util.concurrent.Executors;
 public class MainActivity extends AppCompatActivity {
 
     private TextView sortLabel, t9Hint, t9Display, emptyHint;
-    private RecyclerView recycler;
+    private PullDownRecyclerView recycler;
     private View keypad;
     private AppListAdapter adapter;
 
@@ -946,44 +946,20 @@ public class MainActivity extends AppCompatActivity {
         // 读取设置
         boolean enabled = getSharedPreferences("settings", MODE_PRIVATE)
                 .getBoolean("pull_down_hover", true);
-        if (!enabled) return;
-
-        final float[] startY = {0};
-        final boolean[] isTracking = {false};
-
-        recycler.setOnTouchListener((v, event) -> {
-            switch (event.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN:
-                    startY[0] = event.getY();
-                    isTracking[0] = true;
-                    break;
-                case MotionEvent.ACTION_UP:
-                    if (isTracking[0]) {
-                        float dy = event.getY() - startY[0];
-                        // 快速下拉且列表已在顶部（无法继续上滚）
-                        if (dy > 120 && !recycler.canScrollVertically(-1)) {
-                            triggerPullDownHover();
-                        }
-                        isTracking[0] = false;
-                    }
-                    break;
-                case MotionEvent.ACTION_CANCEL:
-                    isTracking[0] = false;
-                    break;
-            }
-            return false; // 不消费事件，让 RecyclerView 正常处理滚动
-        });
+        recycler.setOnPullDownListener(enabled ? this::triggerPullDownHover : null);
     }
 
     /** 触发下拉悬停：切换悬停状态 */
     private void triggerPullDownHover() {
         pullDownHoverActive = !pullDownHoverActive;
         if (pullDownHoverActive) {
-            // 向下滚动偏移，让顶部应用移到下半屏
-            recycler.smoothScrollBy(0, PULL_DOWN_HOVER_OFFSET);
+            // 设置顶部 padding 让内容下移，使顶部应用移到下半屏
+            recycler.setPadding(0, PULL_DOWN_HOVER_OFFSET, 0, 0);
+            recycler.scrollToPosition(0);
         } else {
             // 恢复原位
-            recycler.smoothScrollToPosition(0);
+            recycler.setPadding(0, 0, 0, 0);
+            recycler.scrollToPosition(0);
         }
     }
 

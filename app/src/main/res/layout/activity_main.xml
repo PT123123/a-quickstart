@@ -103,7 +103,7 @@
         android:layout_height="0dp"
         android:layout_weight="1">
 
-        <androidx.recyclerview.widget.RecyclerView
+        <com.quickstart.PullDownRecyclerView
             android:id="@+id/app_list"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
