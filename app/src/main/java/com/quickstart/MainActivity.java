@@ -40,7 +40,7 @@ import java.util.concurrent.Executors;
 public class MainActivity extends AppCompatActivity {
 
     private TextView sortLabel, t9Hint, t9Display, emptyHint;
-    private PullDownRecyclerView recycler;
+    private RecyclerView recycler;
     private View keypad;
     private AppListAdapter adapter;
 
@@ -60,6 +60,8 @@ public class MainActivity extends AppCompatActivity {
     private static final int PULL_DOWN_HOVER_OFFSET = 600;
     /** 下拉悬停是否触发 */
     private boolean pullDownHoverActive = false;
+    /** 是否正在执行悬停动画（忽略此期间的滚动事件） */
+    private boolean isAnimatingHover = false;
 
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -940,27 +942,88 @@ public class MainActivity extends AppCompatActivity {
      * 设置下拉悬停功能：
      * 当用户在应用列表顶部快速从上往下滑动时，列表内容向下偏移悬停，
      * 使顶部的应用移到下半屏，方便单手操作。
-     * 再次下拉可恢复正常位置。
+     * 上滑可恢复正常位置。
      */
     private void setupPullDownHover() {
         // 读取设置
         boolean enabled = getSharedPreferences("settings", MODE_PRIVATE)
                 .getBoolean("pull_down_hover", true);
-        recycler.setOnPullDownListener(enabled ? this::triggerPullDownHover : null);
+        if (!enabled) return;
+
+        recycler.addOnItemTouchListener(new RecyclerView.OnItemTouchListener() {
+            private float startY = 0;
+            private boolean isTracking = false;
+
+            @Override
+            public boolean onInterceptTouchEvent(RecyclerView rv, MotionEvent e) {
+                switch (e.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        startY = e.getY();
+                        isTracking = true;
+                        break;
+                    case MotionEvent.ACTION_MOVE:
+                        if (isTracking) {
+                            float dy = e.getY() - startY;
+                            if (dy > 100 && !rv.canScrollVertically(-1)) {
+                                // 下拉悬停
+                                isTracking = false;
+                                activateHover();
+                                return true;
+                            } else if (dy < -100 && pullDownHoverActive) {
+                                // 上滑取消悬停
+                                isTracking = false;
+                                cancelHover();
+                                return true;
+                            }
+                        }
+                        break;
+                }
+                return false;
+            }
+
+            @Override
+            public void onTouchEvent(RecyclerView rv, MotionEvent e) {
+                if (e.getActionMasked() == MotionEvent.ACTION_UP) {
+                    isTracking = false;
+                }
+            }
+
+            @Override
+            public void onRequestDisallowInterceptTouchEvent(boolean disallowIntercept) {}
+        });
     }
 
-    /** 触发下拉悬停：切换悬停状态 */
-    private void triggerPullDownHover() {
-        pullDownHoverActive = !pullDownHoverActive;
-        if (pullDownHoverActive) {
-            // 设置顶部 padding 让内容下移，使顶部应用移到下半屏
-            recycler.setPadding(0, PULL_DOWN_HOVER_OFFSET, 0, 0);
-            recycler.scrollToPosition(0);
-        } else {
-            // 恢复原位
-            recycler.setPadding(0, 0, 0, 0);
-            recycler.scrollToPosition(0);
-        }
+    /** 激活悬停 */
+    private void activateHover() {
+        if (pullDownHoverActive) return;
+        pullDownHoverActive = true;
+        animateTranslationY(0, PULL_DOWN_HOVER_OFFSET);
+    }
+
+    /** 取消悬停 */
+    private void cancelHover() {
+        if (!pullDownHoverActive) return;
+        pullDownHoverActive = false;
+        animateTranslationY(PULL_DOWN_HOVER_OFFSET, 0);
+    }
+
+    /** 平滑过渡 translationY */
+    private void animateTranslationY(float from, float to) {
+        isAnimatingHover = true;
+        android.animation.ValueAnimator animator = android.animation.ValueAnimator.ofFloat(from, to);
+        animator.setDuration(300);
+        animator.setInterpolator(new android.view.animation.DecelerateInterpolator());
+        animator.addUpdateListener(animation -> {
+            float value = (float) animation.getAnimatedValue();
+            recycler.setTranslationY(value);
+        });
+        animator.addListener(new android.animation.AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(android.animation.Animator animation) {
+                isAnimatingHover = false;
+            }
+        });
+        animator.start();
     }
 
     /**
