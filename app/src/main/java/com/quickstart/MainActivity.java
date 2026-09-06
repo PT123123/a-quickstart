@@ -23,11 +23,11 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import com.quickstart.adapter.AppListAdapter;
 import com.quickstart.model.AppEntry;
-import com.quickstart.util.AppCache;
 import com.quickstart.util.AppLoader;
 import com.quickstart.util.FastCache;
 import com.quickstart.util.IconCache;
 import com.quickstart.util.KeyBindingHelper;
+import com.quickstart.util.SearchHistory;
 import com.quickstart.util.T9Matcher;
 
 import java.util.ArrayList;
@@ -46,6 +46,8 @@ public class MainActivity extends AppCompatActivity {
     private List<AppEntry> filtered = new ArrayList<>();
     private StringBuilder query = new StringBuilder();
     private String currentCategory = null;
+    /** 当前「最近搜索」分类的历史键集合（包名/Activity），非该分类时为 null */
+    private java.util.Set<String> searchHistoryKeys;
 
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -60,17 +62,12 @@ public class MainActivity extends AppCompatActivity {
         }
     };
 
-    private static final String[] KEY_LETTERS = {
-        "A", "", "ABC", "DEF", "GHI", "JKL", "MNO", "PQRS", "TUV", "WXYZ"
-    };
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         applyWindowSize();
         applyBackgroundColor();
-        applyFontColor();
 
         sortLabel  = findViewById(R.id.sort_label);
         t9Hint     = findViewById(R.id.t9_hint);
@@ -78,9 +75,6 @@ public class MainActivity extends AppCompatActivity {
         emptyHint  = findViewById(R.id.empty_hint);
         recycler   = findViewById(R.id.app_list);
         keypad     = findViewById(R.id.keypad);
-
-        // 加载状态遮罩
-        View loadingOverlay = findViewById(R.id.loading_overlay);
 
         adapter = new AppListAdapter();
         adapter.setOnAppClickListener(this::launchApp);
@@ -95,6 +89,9 @@ public class MainActivity extends AppCompatActivity {
         boolean showDot = getSharedPreferences("settings", MODE_PRIVATE)
                 .getBoolean("recent_app_dot", true);
         adapter.setShowRecentDot(showDot);
+
+        // 依赖 adapter，必须在其初始化之后调用
+        applyFontColor();
 
         sortLabel.setOnClickListener(v -> showSortMenu());
 
@@ -372,11 +369,19 @@ public class MainActivity extends AppCompatActivity {
     private void doFilter() {
         String q = query.toString();
         java.util.Set<String> hidden = getHiddenPackages();
+        // 「最近搜索」叠加 T9 输入时需要按 包名/Activity 判断命中，提前构建历史键集合
+        searchHistoryKeys = "最近搜索".equals(currentCategory) ? loadHistoryKeys() : null;
         filtered = new ArrayList<>();
         if (q.isEmpty() && currentCategory == null) {
             for (AppEntry e : allApps) {
                 if (!hidden.contains(e.packageName)) filtered.add(e);
             }
+        } else if (q.isEmpty() && "最近搜索".equals(currentCategory)) {
+            filtered = buildRecentSearched(hidden);
+        } else if (q.isEmpty() && "最近使用".equals(currentCategory)) {
+            filtered = buildRecentlyUsed(hidden);
+        } else if (q.isEmpty() && "最近安装".equals(currentCategory)) {
+            filtered = buildRecentlyInstalled(hidden);
         } else {
             for (AppEntry e : allApps) {
                 if (hidden.contains(e.packageName)) continue;
@@ -391,24 +396,110 @@ public class MainActivity extends AppCompatActivity {
         }
         adapter.setHighlightQuery(q);
         adapter.submit(filtered);
-        emptyHint.setVisibility(filtered.isEmpty() ? View.VISIBLE : View.GONE);
+        if (filtered.isEmpty()) {
+            emptyHint.setText(emptyHintText());
+            emptyHint.setVisibility(View.VISIBLE);
+        } else {
+            emptyHint.setVisibility(View.GONE);
+        }
         recycler.setVisibility(filtered.isEmpty() ? View.GONE : View.VISIBLE);
+    }
+
+    /** 空态提示文案：按当前筛选模式区分 */
+    private String emptyHintText() {
+        if ("最近搜索".equals(currentCategory)) return "暂无搜索记录";
+        if ("最近使用".equals(currentCategory)) return "暂无使用记录";
+        if ("最近安装".equals(currentCategory)) return "最近没有新安装的应用";
+        return "没有匹配的应用";
+    }
+
+    /** 「最近搜索」：按搜索时间倒序列出历史命中的应用（已卸载/已隐藏的自动跳过） */
+    private List<AppEntry> buildRecentSearched(java.util.Set<String> hidden) {
+        List<AppEntry> out = new ArrayList<>();
+        for (SearchHistory.Entry h : SearchHistory.getAll(this)) {
+            AppEntry e = findApp(h.packageName, h.activityName);
+            if (e != null && !hidden.contains(e.packageName)) out.add(e);
+        }
+        return out;
+    }
+
+    /** 按 包名+Activity 在 allApps 中查找条目（微信快捷入口的 activityName 为空串） */
+    private AppEntry findApp(String pkg, String act) {
+        for (AppEntry e : allApps) {
+            if (e.packageName.equals(pkg) && e.activityName.equals(act)) return e;
+        }
+        return null;
+    }
+
+    /** 「最近使用」：启动过的应用按最近启动时间倒序 */
+    private List<AppEntry> buildRecentlyUsed(java.util.Set<String> hidden) {
+        List<AppEntry> out = new ArrayList<>();
+        for (AppEntry e : allApps) {
+            if (!hidden.contains(e.packageName)
+                    && lastLaunchTimeCache.getOrDefault(e.packageName, 0L) > 0) {
+                out.add(e);
+            }
+        }
+        out.sort((a, b) -> Long.compare(
+                lastLaunchTimeCache.getOrDefault(b.packageName, 0L),
+                lastLaunchTimeCache.getOrDefault(a.packageName, 0L)));
+        return out;
+    }
+
+    /** 「最近安装」：recent_time_range 范围内安装的应用，按安装时间倒序 */
+    private List<AppEntry> buildRecentlyInstalled(java.util.Set<String> hidden) {
+        long now = System.currentTimeMillis();
+        long range = getRecentTimeRange();
+        List<AppEntry> out = new ArrayList<>();
+        for (AppEntry e : allApps) {
+            long t = installTimeCache.getOrDefault(e.packageName, 0L);
+            if (!hidden.contains(e.packageName) && t > 0 && now - t <= range) {
+                out.add(e);
+            }
+        }
+        out.sort((a, b) -> Long.compare(
+                installTimeCache.getOrDefault(b.packageName, 0L),
+                installTimeCache.getOrDefault(a.packageName, 0L)));
+        return out;
+    }
+
+    /** 读取最近更新范围设置（毫秒），默认 7 天，与 AppLoader 一致 */
+    private long getRecentTimeRange() {
+        try {
+            return Long.parseLong(getSharedPreferences("settings", MODE_PRIVATE)
+                    .getString("recent_time_range", "604800000"));
+        } catch (NumberFormatException e) {
+            return 604800000L;
+        }
+    }
+
+    /** 构建搜索历史的 包名/Activity 键集合（供 matchCategory 用） */
+    private java.util.Set<String> loadHistoryKeys() {
+        java.util.Set<String> keys = new java.util.HashSet<>();
+        for (SearchHistory.Entry h : SearchHistory.getAll(this)) {
+            keys.add(h.packageName + "/" + h.activityName);
+        }
+        return keys;
     }
 
     /** 搜索权重排序：综合使用频率、最近使用时间、是否精确匹配 */
     private void sortBySearchWeight(List<AppEntry> list, String query) {
         long now = System.currentTimeMillis();
         final long ONE_DAY = 24 * 60 * 60 * 1000L;
+        final String lowerQuery = query.toLowerCase();
 
-        java.util.Collections.sort(list, (a, b) -> {
-            int scoreA = calcSearchScore(a, query, now, ONE_DAY);
-            int scoreB = calcSearchScore(b, query, now, ONE_DAY);
-            return Integer.compare(scoreB, scoreA); // 降序
-        });
+        // 先为每个应用计算一次分数，比较器只查表，避免排序过程中 O(n log n) 次重复计算
+        final java.util.Map<AppEntry, Integer> scores =
+                new java.util.IdentityHashMap<>(list.size() * 2);
+        for (AppEntry e : list) {
+            scores.put(e, calcSearchScore(e, lowerQuery, now, ONE_DAY));
+        }
+        java.util.Collections.sort(list, (a, b) ->
+                Integer.compare(scores.get(b), scores.get(a))); // 降序
     }
 
-    /** 计算搜索权重分数 */
-    private int calcSearchScore(AppEntry e, String query, long now, long oneDay) {
+    /** 计算搜索权重分数（lowerQuery 为已转小写的搜索词） */
+    private int calcSearchScore(AppEntry e, String lowerQuery, long now, long oneDay) {
         int score = 0;
 
         // 1. 使用频率权重（最高 100 分）
@@ -427,7 +518,6 @@ public class MainActivity extends AppCompatActivity {
 
         // 3. 精确匹配加分（最高 50 分）
         String lowerLabel = e.label.toLowerCase();
-        String lowerQuery = query.toLowerCase();
         if (lowerLabel.startsWith(lowerQuery)) score += 50; // 开头匹配
         else if (lowerLabel.contains(lowerQuery)) score += 30; // 包含匹配
 
@@ -452,6 +542,15 @@ public class MainActivity extends AppCompatActivity {
             case "购物": return containsAny(pkg, "com.taobao", "com.jingdong", "com.xunmeng")
                     || containsAny(label, "淘宝", "京东", "拼多多");
             case "理财": return containsAny(label, "银行", "支付宝", "股票");
+            case "最近搜索": {
+                if (searchHistoryKeys == null) searchHistoryKeys = loadHistoryKeys();
+                return searchHistoryKeys.contains(e.packageName + "/" + e.activityName);
+            }
+            case "最近使用": return lastLaunchTimeCache.getOrDefault(e.packageName, 0L) > 0;
+            case "最近安装": {
+                long t = installTimeCache.getOrDefault(e.packageName, 0L);
+                return t > 0 && System.currentTimeMillis() - t <= getRecentTimeRange();
+            }
             default: return true;
         }
     }
@@ -463,6 +562,10 @@ public class MainActivity extends AppCompatActivity {
 
     private void launchApp(AppEntry entry) {
         recordLaunch(entry.packageName); // 记录启动次数（用于使用频率排序）
+        // 记录搜索历史（仅在有搜索词时；T9 自动启动和手动点击都经过这里）
+        if (query.length() > 0) {
+            SearchHistory.record(this, query.toString(), entry.packageName, entry.activityName);
+        }
         try {
             if (entry.launchIntent != null) {
                 startActivity(entry.launchIntent);
@@ -569,14 +672,14 @@ public class MainActivity extends AppCompatActivity {
     /** 最近启动时间缓存 */
     private java.util.Map<String, Long> lastLaunchTimeCache = new java.util.HashMap<>();
 
-    /** 预加载排序相关数据到内存缓存（后台线程调用） */
-    private void preloadSortData() {
+    /** 预加载排序相关数据到内存缓存（后台线程调用；必须传入待排序的列表，而不是 allApps） */
+    private void preloadSortData(List<AppEntry> list) {
         installTimeCache.clear();
         launchCountCache.clear();
         lastLaunchTimeCache.clear();
         SharedPreferences countSp = getSharedPreferences("app_launch_count", MODE_PRIVATE);
         SharedPreferences timeSp = getSharedPreferences("app_launch_time", MODE_PRIVATE);
-        for (AppEntry e : allApps) {
+        for (AppEntry e : list) {
             try {
                 installTimeCache.put(e.packageName,
                         getPackageManager().getPackageInfo(e.packageName, 0).firstInstallTime);
@@ -588,27 +691,27 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /** 对 allApps 排序（必须在预加载数据后调用） */
-    private void sortAllApps() {
+    /** 对指定列表排序（必须在预加载数据后调用） */
+    private void sortAllApps(List<AppEntry> list) {
         String sortMode = getSharedPreferences("settings", MODE_PRIVATE)
                 .getString("sort_mode", "智能排序");
         switch (sortMode) {
             case "字母顺序":
-                java.util.Collections.sort(allApps, (a, b) ->
+                java.util.Collections.sort(list, (a, b) ->
                         a.label.compareToIgnoreCase(b.label));
                 break;
             case "最近安装":
-                java.util.Collections.sort(allApps, (a, b) ->
+                java.util.Collections.sort(list, (a, b) ->
                         Long.compare(installTimeCache.getOrDefault(b.packageName, 0L),
                                 installTimeCache.getOrDefault(a.packageName, 0L)));
                 break;
             case "使用频率":
-                java.util.Collections.sort(allApps, (a, b) ->
+                java.util.Collections.sort(list, (a, b) ->
                         Integer.compare(launchCountCache.getOrDefault(b.packageName, 0),
                                 launchCountCache.getOrDefault(a.packageName, 0)));
                 break;
             default: // 智能排序：启动过的应用按频率降序排前面，未启动的按字母排序
-                java.util.Collections.sort(allApps, (a, b) -> {
+                java.util.Collections.sort(list, (a, b) -> {
                     int countA = launchCountCache.getOrDefault(a.packageName, 0);
                     int countB = launchCountCache.getOrDefault(b.packageName, 0);
                     if (countA > 0 && countB > 0) return Integer.compare(countB, countA); // 都启动过，按频率
@@ -636,22 +739,15 @@ public class MainActivity extends AppCompatActivity {
     /** 排序并刷新列表（仅在排序模式改变时调用） */
     private void sortAndFilter() {
         io.execute(() -> {
-            preloadSortData(); // 预加载排序数据
-            sortAllApps();
-            main.post(this::doFilter);
+            // 在快照上排序，排好后再切回主线程替换 allApps，避免与主线程并发读写同一列表
+            List<AppEntry> snapshot = new ArrayList<>(allApps);
+            preloadSortData(snapshot); // 预加载排序数据
+            sortAllApps(snapshot);
+            main.post(() -> {
+                allApps = snapshot;
+                doFilter();
+            });
         });
-    }
-
-    /** 切换深色/浅色主题 */
-    private void toggleTheme() {
-        int current = androidx.appcompat.app.AppCompatDelegate.getDefaultNightMode();
-        if (current == androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES) {
-            androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(
-                    androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO);
-        } else {
-            androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(
-                    androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES);
-        }
     }
 
     /** 获取当前列数（默认 3） */
@@ -662,36 +758,6 @@ public class MainActivity extends AppCompatActivity {
             return Integer.parseInt(sp.getString("columns", "3"));
         }
         return sp.getInt("column_count", 3);
-    }
-
-    /** 设置列数并刷新列表 */
-    public void setColumnCount(int count) {
-        getSharedPreferences("settings", MODE_PRIVATE)
-                .edit().putString("columns", String.valueOf(count)).apply();
-        GridLayoutManager layoutManager = (GridLayoutManager) recycler.getLayoutManager();
-        if (layoutManager != null) {
-            layoutManager.setSpanCount(count);
-        }
-        adapter.setColumnCount(count);
-    }
-
-    /** 弹出列数选择对话框 */
-    private void showColumnCountDialog() {
-        int current = getColumnCount();
-        String[] options = {"2 列", "3 列", "4 列", "5 列"};
-        int[] values = {2, 3, 4, 5};
-        int checked = 1; // default 3
-        for (int i = 0; i < values.length; i++) {
-            if (values[i] == current) checked = i;
-        }
-        new androidx.appcompat.app.AlertDialog.Builder(this)
-                .setTitle("设置列数")
-                .setSingleChoiceItems(options, checked, (dialog, which) -> {
-                    setColumnCount(values[which]);
-                    dialog.dismiss();
-                })
-                .setNegativeButton("取消", null)
-                .show();
     }
 
     /** 应用窗口大小设置 */
@@ -754,6 +820,22 @@ public class MainActivity extends AppCompatActivity {
                 }
                 doFilter();
             });
+            // 长按「最近搜索」chip：清空搜索历史
+            if (chip instanceof TextView && "最近搜索".equals(((TextView) chip).getText().toString())) {
+                chip.setOnLongClickListener(v -> {
+                    new androidx.appcompat.app.AlertDialog.Builder(MainActivity.this)
+                            .setTitle("清空搜索历史")
+                            .setMessage("确定清空全部搜索历史吗？")
+                            .setPositiveButton("清空", (d, w) -> {
+                                SearchHistory.clear(MainActivity.this);
+                                if ("最近搜索".equals(currentCategory)) doFilter();
+                                Toast.makeText(MainActivity.this, "搜索历史已清空", Toast.LENGTH_SHORT).show();
+                            })
+                            .setNegativeButton("取消", null)
+                            .show();
+                    return true;
+                });
+            }
         }
     }
 
@@ -783,8 +865,8 @@ public class MainActivity extends AppCompatActivity {
                         } catch (Throwable ignored) {}
                     }
                 }
-                preloadSortData(); // 预加载安装时间和启动次数
-                sortAllApps();     // 排序
+                preloadSortData(cached); // 预加载安装时间和启动次数
+                sortAllApps(cached);     // 排序
 
                 // 显示已排序的缓存列表（排除隐藏应用）
                 java.util.Set<String> hidden = getHiddenPackages();
@@ -803,10 +885,11 @@ public class MainActivity extends AppCompatActivity {
             final List<String> packages = new java.util.ArrayList<>();
             for (AppEntry e : loaded) packages.add(e.packageName);
             final List<AppEntry> finalLoaded = loaded;
+            // IconCache.preloadAll 的回调在后台线程执行，这里的重活不会阻塞主线程
             IconCache.preloadAll(MainActivity.this, packages, () -> {
                 FastCache.save(MainActivity.this, finalLoaded); // 保存到二进制缓存
-                preloadSortData(); // 重新预加载排序数据
-                sortAllApps();     // 重新排序
+                preloadSortData(finalLoaded); // 重新预加载排序数据
+                sortAllApps(finalLoaded);     // 重新排序
 
                 // 更新 UI（排除隐藏应用）
                 java.util.Set<String> hidden2 = getHiddenPackages();
@@ -829,31 +912,11 @@ public class MainActivity extends AppCompatActivity {
             // 排除隐藏应用
             java.util.Set<String> hidden = getHiddenPackages();
             loaded.removeIf(e -> hidden.contains(e.packageName));
-            AppCache.save(this, loaded);
             main.post(() -> {
                 allApps = loaded;
                 doFilter();
             });
         });
-    }
-
-    /** 为缓存条目补齐启动 Intent + 占位图标（轻量操作，不触发图标/拼音重算） */
-    private void fillCachedEntries(List<AppEntry> list) {
-        PackageManager pm = getPackageManager();
-        for (AppEntry e : list) {
-            try {
-                Intent intent = pm.getLaunchIntentForPackage(e.packageName);
-                if (intent != null) {
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    e.launchIntent = intent;
-                }
-            } catch (Throwable ignored) {}
-            if (e.icon == null) {
-                try {
-                    e.icon = pm.getDefaultActivityIcon();
-                } catch (Throwable ignored) {}
-            }
-        }
     }
 
     @Override

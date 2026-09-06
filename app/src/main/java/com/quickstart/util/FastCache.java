@@ -2,7 +2,6 @@ package com.quickstart.util;
 
 import android.content.Context;
 import android.graphics.Bitmap;
-import android.graphics.Canvas;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 
@@ -169,7 +168,8 @@ public final class FastCache {
     private static byte[] iconToBytes(Drawable drawable) {
         if (drawable == null) return null;
         try {
-            Bitmap bitmap = drawableToBitmap(drawable);
+            // 缩到落盘尺寸再压缩，缓存文件更小、读回时解码也更快
+            Bitmap bitmap = IconCache.drawableToScaledBitmap(drawable, IconCache.DISK_ICON_SIZE);
             if (bitmap == null) return null;
             java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, baos);
@@ -182,26 +182,11 @@ public final class FastCache {
     private static Drawable bytesToDrawable(Context ctx, byte[] bytes) {
         if (bytes == null || bytes.length == 0) return null;
         try {
-            Bitmap bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+            Bitmap bitmap = IconCache.decodeScaled(bytes);
             if (bitmap == null) return null;
             return new BitmapDrawable(ctx.getResources(), bitmap);
         } catch (Throwable e) {
             return null;
         }
-    }
-
-    private static Bitmap drawableToBitmap(Drawable drawable) {
-        if (drawable instanceof BitmapDrawable) {
-            Bitmap bmp = ((BitmapDrawable) drawable).getBitmap();
-            if (bmp != null) return bmp.copy(Bitmap.Config.ARGB_8888, false);
-        }
-        int w = drawable.getIntrinsicWidth();
-        int h = drawable.getIntrinsicHeight();
-        if (w <= 0 || h <= 0) w = h = 96;
-        Bitmap bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-        Canvas canvas = new Canvas(bitmap);
-        drawable.setBounds(0, 0, w, h);
-        drawable.draw(canvas);
-        return bitmap;
     }
 }

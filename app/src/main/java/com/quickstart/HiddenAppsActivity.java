@@ -22,6 +22,8 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * 已隐藏应用管理页面 — 列出所有被隐藏的应用，支持恢复显示。
@@ -31,6 +33,7 @@ public class HiddenAppsActivity extends AppCompatActivity {
     private RecyclerView recycler;
     private TextView emptyHint;
     private HiddenAppAdapter adapter;
+    private final ExecutorService io = Executors.newSingleThreadExecutor();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -52,29 +55,34 @@ public class HiddenAppsActivity extends AppCompatActivity {
         loadHiddenApps();
     }
 
-    /** 从 SharedPreferences 读取隐藏列表，加载对应应用信息 */
+    /** 从 SharedPreferences 读取隐藏列表；名称/图标涉及 binder IPC，放到后台线程加载 */
     private void loadHiddenApps() {
-        Set<String> hidden = getSharedPreferences("settings", MODE_PRIVATE)
-                .getStringSet("hidden_apps", new HashSet<>());
+        io.execute(() -> {
+            Set<String> hidden = getSharedPreferences("settings", MODE_PRIVATE)
+                    .getStringSet("hidden_apps", new HashSet<>());
 
-        List<AppInfo> list = new ArrayList<>();
-        PackageManager pm = getPackageManager();
+            List<AppInfo> list = new ArrayList<>();
+            PackageManager pm = getPackageManager();
 
-        for (String pkg : hidden) {
-            try {
-                ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
-                String label = pm.getApplicationLabel(ai).toString();
-                Drawable icon = pm.getApplicationIcon(ai);
-                list.add(new AppInfo(label, pkg, icon));
-            } catch (PackageManager.NameNotFoundException e) {
-                // 应用已卸载，仅显示包名
-                list.add(new AppInfo(pkg + " (已卸载)", pkg, null));
+            for (String pkg : hidden) {
+                try {
+                    ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
+                    String label = pm.getApplicationLabel(ai).toString();
+                    Drawable icon = pm.getApplicationIcon(ai);
+                    list.add(new AppInfo(label, pkg, icon));
+                } catch (PackageManager.NameNotFoundException e) {
+                    // 应用已卸载，仅显示包名
+                    list.add(new AppInfo(pkg + " (已卸载)", pkg, null));
+                }
             }
-        }
 
-        adapter.setApps(list);
-        emptyHint.setVisibility(list.isEmpty() ? View.VISIBLE : View.GONE);
-        recycler.setVisibility(list.isEmpty() ? View.GONE : View.VISIBLE);
+            runOnUiThread(() -> {
+                if (isFinishing()) return;
+                adapter.setApps(list);
+                emptyHint.setVisibility(list.isEmpty() ? View.VISIBLE : View.GONE);
+                recycler.setVisibility(list.isEmpty() ? View.GONE : View.VISIBLE);
+            });
+        });
     }
 
     /** 恢复指定应用：从 hidden_apps 集合中移除 */
@@ -94,6 +102,12 @@ public class HiddenAppsActivity extends AppCompatActivity {
             return true;
         }
         return super.onOptionsItemSelected(item);
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        io.shutdownNow();
     }
 
     /** 简单的应用信息内部类 */

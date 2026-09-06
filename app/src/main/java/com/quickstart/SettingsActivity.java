@@ -65,24 +65,6 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
     @Override
-    protected void onResume() {
-        super.onResume();
-        android.util.Log.d("SettingsActivity", "onResume");
-    }
-
-    @Override
-    protected void onPause() {
-        super.onPause();
-        android.util.Log.d("SettingsActivity", "onPause");
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        android.util.Log.d("SettingsActivity", "onDestroy");
-    }
-
-    @Override
     public boolean onOptionsItemSelected(@NonNull MenuItem item) {
         if (item.getItemId() == android.R.id.home) {
             finish();
@@ -161,17 +143,7 @@ public class SettingsActivity extends AppCompatActivity {
                 });
             }
 
-            // 列数设置
-            ListPreference columnCount = findPreference("column_count");
-            if (columnCount != null) {
-                columnCount.setOnPreferenceChangeListener((pref, val) -> {
-                    int count = Integer.parseInt(val.toString());
-                    if (getActivity() instanceof MainActivity) {
-                        ((MainActivity) getActivity()).setColumnCount(count);
-                    }
-                    return true;
-                });
-            }
+            // 列数（ListPreference "columns"，MainActivity 下次启动时读取）
 
             // 最近更新范围
             ListPreference recentTime = findPreference("recent_time_range");
