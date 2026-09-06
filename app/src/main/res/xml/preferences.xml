@@ -105,7 +105,7 @@
         <Preference
             android:key="import_export_config"
             android:title="导入/导出配置"
-            android:summary="导出当前配置到剪贴板，或从剪贴板导入配置" />
+            android:summary="二维码扫码传送或剪贴板复制（含界面设置、键位绑定、隐藏应用）" />
 
     </PreferenceCategory>
 

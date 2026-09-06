@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- 扫码接收配置（二维码传送）需要相机；无相机设备不影响其他功能 -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+
     <!-- Android 11+ 包可见性：声明要查询所有可启动应用 -->
     <queries>
         <intent>
@@ -47,6 +53,14 @@
             android:name=".KeyBindingActivity"
             android:exported="false"
             android:label="数字键绑定应用"
+            android:theme="@style/AppTheme" />
+
+        <!-- 二维码配置传送（发送/接收） -->
+        <activity
+            android:name=".QrTransferActivity"
+            android:exported="false"
+            android:label="扫码传送配置"
+            android:screenOrientation="portrait"
             android:theme="@style/AppTheme" />
 
         <!-- 广告跳过无障碍服务 -->
