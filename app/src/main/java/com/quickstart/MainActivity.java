@@ -940,7 +940,7 @@ public class MainActivity extends AppCompatActivity {
      * 设置下拉悬停功能：
      * 当用户在应用列表顶部快速从上往下滑动时，列表内容向下偏移悬停，
      * 使顶部的应用移到下半屏，方便单手操作。
-     * 再次下拉或上推可恢复正常位置。
+     * 再次下拉可恢复正常位置。
      */
     private void setupPullDownHover() {
         // 读取设置
@@ -948,40 +948,30 @@ public class MainActivity extends AppCompatActivity {
                 .getBoolean("pull_down_hover", true);
         if (!enabled) return;
 
-        GestureDetector pullDownDetector = new GestureDetector(this,
-                new GestureDetector.SimpleOnGestureListener() {
-                    private static final int PULL_DOWN_THRESHOLD = 100;
-                    private static final int PULL_DOWN_VELOCITY_THRESHOLD = 200;
+        final float[] startY = {0};
+        final boolean[] isTracking = {false};
 
-                    @Override
-                    public boolean onFling(MotionEvent e1, MotionEvent e2,
-                                           float velocityX, float velocityY) {
-                        if (e1 == null || e2 == null) return false;
-                        float dy = e2.getY() - e1.getY();
-                        // 快速下拉：向下位移足够且向下的速度足够
-                        if (dy > PULL_DOWN_THRESHOLD
-                                && velocityY > PULL_DOWN_VELOCITY_THRESHOLD) {
+        recycler.setOnTouchListener((v, event) -> {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    startY[0] = event.getY();
+                    isTracking[0] = true;
+                    break;
+                case MotionEvent.ACTION_UP:
+                    if (isTracking[0]) {
+                        float dy = event.getY() - startY[0];
+                        // 快速下拉且列表已在顶部（无法继续上滚）
+                        if (dy > 120 && !recycler.canScrollVertically(-1)) {
                             triggerPullDownHover();
-                            return true;
                         }
-                        return false;
+                        isTracking[0] = false;
                     }
-                });
-
-        recycler.addOnItemTouchListener(new RecyclerView.OnItemTouchListener() {
-            @Override
-            public boolean onInterceptTouchEvent(RecyclerView rv, MotionEvent e) {
-                pullDownDetector.onTouchEvent(e);
-                return false;
+                    break;
+                case MotionEvent.ACTION_CANCEL:
+                    isTracking[0] = false;
+                    break;
             }
-
-            @Override
-            public void onTouchEvent(RecyclerView rv, MotionEvent e) {
-                pullDownDetector.onTouchEvent(e);
-            }
-
-            @Override
-            public void onRequestDisallowInterceptTouchEvent(boolean disallowIntercept) {}
+            return false; // 不消费事件，让 RecyclerView 正常处理滚动
         });
     }
 
