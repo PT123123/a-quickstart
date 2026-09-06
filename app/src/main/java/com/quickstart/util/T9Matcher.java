@@ -64,7 +64,13 @@ public final class T9Matcher {
         String rawDigits = lettersToDigits(label);
         if (!rawDigits.isEmpty()) result.add(rawDigits);
 
-        // 2) 用 TinyPinyin 把整个标签转成拼音（带分隔符），再分别取首字母 / 全拼
+        // 2) 纯英文标签（只含 ASCII 字母、数字、空格）跳过拼音转换，
+        //    避免 TinyPinyin 对非中文字符返回意外结果导致指纹冲突
+        if (isPureEnglish(label)) {
+            return result;
+        }
+
+        // 3) 用 TinyPinyin 把整个标签转成拼音（带分隔符），再分别取首字母 / 全拼
         try {
             String pinyin = Pinyin.toPinyin(label, " "); // "wei xin"
             if (pinyin != null && !pinyin.isEmpty()) {
@@ -97,6 +103,16 @@ public final class T9Matcher {
             // TinyPinyin 极端情况下可能异常，忽略即可
         }
         return result;
+    }
+
+    /** 判断标签是否为纯英文（只含 ASCII 字母、数字、空格和常见符号） */
+    private static boolean isPureEnglish(String label) {
+        for (int i = 0; i < label.length(); i++) {
+            char ch = label.charAt(i);
+            // 如果包含任何非 ASCII 字符（如中文），则不是纯英文
+            if (ch > 127) return false;
+        }
+        return true;
     }
 
     /**

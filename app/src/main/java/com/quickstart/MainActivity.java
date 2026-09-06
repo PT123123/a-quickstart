@@ -9,8 +9,11 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
+import android.view.GestureDetector;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.PopupMenu;
@@ -48,6 +51,14 @@ public class MainActivity extends AppCompatActivity {
     private String currentCategory = null;
     /** 当前「最近搜索」分类的历史键集合（包名/Activity），非该分类时为 null */
     private java.util.Set<String> searchHistoryKeys;
+
+    /** 分类标签有序列表（用于左右滑动切换） */
+    private final String[] categoryList = {
+            "最近搜索", "最近使用", "最近安装", "社交", "影音",
+            "交通出行", "实用工具", "游戏", "购物", "理财"
+    };
+    /** 悬浮吸顶标签栏的滚动阈值（px） */
+    private static final int STICKY_BAR_SCROLL_THRESHOLD = 200;
 
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -113,6 +124,8 @@ public class MainActivity extends AppCompatActivity {
 
         setupKeypad();
         setupCategoryChips();
+        setupSwipeToSwitchCategory();
+        setupStickyCategoryBar();
         loadAppsAsync();
     }
 
@@ -818,6 +831,7 @@ public class MainActivity extends AppCompatActivity {
                     v.setSelected(true);
                     currentCategory = ((TextView) v).getText().toString();
                 }
+                updateStickyBarSelection();
                 doFilter();
             });
             // 长按「最近搜索」chip：清空搜索历史
@@ -835,6 +849,159 @@ public class MainActivity extends AppCompatActivity {
                             .show();
                     return true;
                 });
+            }
+        }
+    }
+
+    /**
+     * 设置左右滑动切换分类标签：
+     * 在 RecyclerView 上检测水平滑动手势，左滑切换到下一个标签，右滑切换到上一个标签。
+     */
+    private void setupSwipeToSwitchCategory() {
+        GestureDetector gestureDetector = new GestureDetector(this,
+                new GestureDetector.SimpleOnGestureListener() {
+                    private static final int SWIPE_THRESHOLD = 80;
+                    private static final int SWIPE_VELOCITY_THRESHOLD = 100;
+
+                    @Override
+                    public boolean onFling(MotionEvent e1, MotionEvent e2,
+                                           float velocityX, float velocityY) {
+                        if (e1 == null || e2 == null) return false;
+                        float dx = e2.getX() - e1.getX();
+                        float dy = e2.getY() - e1.getY();
+                        // 水平滑动且速度足够，垂直位移小于水平位移（避免误触滚动）
+                        if (Math.abs(dx) > SWIPE_THRESHOLD
+                                && Math.abs(velocityX) > SWIPE_VELOCITY_THRESHOLD
+                                && Math.abs(dx) > Math.abs(dy)) {
+                            if (dx < 0) {
+                                switchToNextCategory(); // 左滑 → 下一个
+                            } else {
+                                switchToPreviousCategory(); // 右滑 → 上一个
+                            }
+                            return true;
+                        }
+                        return false;
+                    }
+                });
+
+        recycler.addOnItemTouchListener(new RecyclerView.OnItemTouchListener() {
+            @Override
+            public boolean onInterceptTouchEvent(RecyclerView rv, MotionEvent e) {
+                gestureDetector.onTouchEvent(e);
+                return false; // 不拦截，让 RecyclerView 正常处理滚动
+            }
+
+            @Override
+            public void onTouchEvent(RecyclerView rv, MotionEvent e) {
+                gestureDetector.onTouchEvent(e);
+            }
+
+            @Override
+            public void onRequestDisallowInterceptTouchEvent(boolean disallowIntercept) {}
+        });
+    }
+
+    /** 切换到下一个分类标签 */
+    private void switchToNextCategory() {
+        int currentIndex = getCurrentCategoryIndex();
+        int nextIndex = (currentIndex + 1) % categoryList.length;
+        applyCategory(categoryList[nextIndex]);
+    }
+
+    /** 切换到上一个分类标签 */
+    private void switchToPreviousCategory() {
+        int currentIndex = getCurrentCategoryIndex();
+        int prevIndex = (currentIndex - 1 + categoryList.length) % categoryList.length;
+        applyCategory(categoryList[prevIndex]);
+    }
+
+    /** 获取当前分类在列表中的索引，未选中返回 -1 */
+    private int getCurrentCategoryIndex() {
+        if (currentCategory == null) return -1;
+        for (int i = 0; i < categoryList.length; i++) {
+            if (categoryList[i].equals(currentCategory)) return i;
+        }
+        return -1;
+    }
+
+    /** 应用指定分类（更新 chip 选中状态并过滤） */
+    private void applyCategory(String category) {
+        currentCategory = category;
+        // 更新主标签栏选中状态
+        View chipContainer = findViewById(R.id.category_bar);
+        for (int i = 0; i < ((LinearLayout) chipContainer).getChildCount(); i++) {
+            View chip = ((LinearLayout) chipContainer).getChildAt(i);
+            chip.setSelected(category.equals(((TextView) chip).getText().toString()));
+        }
+        // 更新悬浮标签栏选中状态
+        updateStickyBarSelection();
+        doFilter();
+    }
+
+    /**
+     * 设置悬浮吸顶标签栏：
+     * 复制主标签栏的结构，监听 RecyclerView 滚动，超过阈值时显示，回到顶部时隐藏。
+     */
+    private void setupStickyCategoryBar() {
+        LinearLayout stickyChips = findViewById(R.id.sticky_category_chips);
+        View mainBar = findViewById(R.id.category_bar);
+
+        // 复制主标签栏的 chip 到悬浮栏
+        for (int i = 0; i < ((LinearLayout) mainBar).getChildCount(); i++) {
+            View mainChip = ((LinearLayout) mainBar).getChildAt(i);
+            TextView stickyChip = new TextView(this);
+            // 复制文字和样式属性
+            stickyChip.setText(((TextView) mainChip).getText());
+            stickyChip.setTextColor(getResources().getColorStateList(R.color.category_chip_text, null));
+            stickyChip.setTextSize(12f);
+            stickyChip.setGravity(android.view.Gravity.CENTER);
+            stickyChip.setBackgroundResource(R.drawable.bg_category_chip);
+            stickyChip.setClickable(true);
+            stickyChip.setFocusable(true);
+            // 设置内边距（与 CategoryChip 样式一致）
+            int paddingH = (int) (12 * getResources().getDisplayMetrics().density);
+            int paddingV = (int) (7 * getResources().getDisplayMetrics().density);
+            stickyChip.setPadding(paddingH, paddingV, paddingH, paddingV);
+            // 设置布局参数（高度 28dp，右边距 6dp）
+            int height = (int) (28 * getResources().getDisplayMetrics().density);
+            int margin = (int) (6 * getResources().getDisplayMetrics().density);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, height);
+            lp.setMargins(0, 0, margin, 0);
+            stickyChip.setLayoutParams(lp);
+            stickyChip.setSelected(mainChip.isSelected());
+
+            // 点击事件：同步到主标签栏
+            final String category = ((TextView) mainChip).getText().toString();
+            stickyChip.setOnClickListener(v -> applyCategory(category));
+
+            stickyChips.addView(stickyChip);
+        }
+
+        // 监听滚动，控制悬浮栏显示/隐藏
+        recycler.addOnScrollListener(new RecyclerView.OnScrollListener() {
+            @Override
+            public void onScrolled(RecyclerView recyclerView, int dx, int dy) {
+                int scrollOffset = recyclerView.computeVerticalScrollOffset();
+                HorizontalScrollView stickyBar = findViewById(R.id.sticky_category_bar);
+                if (scrollOffset > STICKY_BAR_SCROLL_THRESHOLD) {
+                    stickyBar.setVisibility(View.VISIBLE);
+                } else {
+                    stickyBar.setVisibility(View.GONE);
+                }
+            }
+        });
+    }
+
+    /** 更新悬浮标签栏的选中状态 */
+    private void updateStickyBarSelection() {
+        LinearLayout stickyChips = findViewById(R.id.sticky_category_chips);
+        if (stickyChips == null) return;
+        for (int i = 0; i < stickyChips.getChildCount(); i++) {
+            View chip = stickyChips.getChildAt(i);
+            if (chip instanceof TextView) {
+                chip.setSelected(currentCategory != null
+                        && currentCategory.equals(((TextView) chip).getText().toString()));
             }
         }
     }
