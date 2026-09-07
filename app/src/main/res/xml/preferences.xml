@@ -113,6 +113,11 @@
             android:title="导入/导出配置"
             android:summary="二维码扫码传送或剪贴板复制（含界面设置、键位绑定、隐藏应用）" />
 
+        <Preference
+            android:key="force_refresh"
+            android:title="强制刷新应用列表"
+            android:summary="清除缓存，重新拉取应用列表和图标" />
+
     </PreferenceCategory>
 
 </PreferenceScreen>
