@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <ListPreference
+        android:key="list_animation"
+        android:title="列表动画"
+        android:summary="T9 输入时应用列表重排的动画效果"
+        android:defaultValue="off"
+        android:entries="@array/list_animation_entries"
+        android:entryValues="@array/list_animation_values" />
+
+    <ListPreference
+        android:key="key_gesture"
+        android:title="数字键启动方式"
+        android:summary="选择数字键快速启动搜索列表应用的手势（另一个手势用于列表角标启动）"
+        android:defaultValue="long_press"
+        android:entries="@array/key_gesture_entries"
+        android:entryValues="@array/key_gesture_values" />
+
+    <Preference
+        android:key="key_binding"
+        android:title="数字键绑定应用"
+        android:summary="为每个数字键绑定指定应用，按对应键直接启动" />
+
+    <ListPreference
+        android:key="swipe_distance"
+        android:title="上滑触发距离"
+        android:summary="调整上滑手势触发所需的滑动距离"
+        android:defaultValue="60"
+        android:entries="@array/swipe_distance_entries"
+        android:entryValues="@array/swipe_distance_values" />
+
+    <ListPreference
+        android:key="long_press_duration"
+        android:title="长按触发时长"
+        android:summary="调整长按手势触发所需的按住时间"
+        android:defaultValue="400"
+        android:entries="@array/long_press_duration_entries"
+        android:entryValues="@array/long_press_duration_values" />
+
+</PreferenceScreen>

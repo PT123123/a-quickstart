@@ -1,11 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:background="?android:attr/colorBackground">
 
-    <!-- 搜索框 -->
+    <!-- 搜索框（跨 Tab 全局搜索） -->
     <EditText
         android:id="@+id/settings_search"
         android:layout_width="match_parent"
@@ -20,8 +21,20 @@
         android:inputType="text"
         android:maxLines="1" />
 
-    <FrameLayout
-        android:id="@+id/settings_container"
+    <!-- Tab 栏 -->
+    <com.google.android.material.tabs.TabLayout
+        android:id="@+id/settings_tabs"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="?attr/colorPrimary"
+        app:tabTextColor="#CCFFFFFF"
+        app:tabSelectedTextColor="@android:color/white"
+        app:tabIndicatorColor="@android:color/white"
+        app:tabMode="fixed" />
+
+    <!-- ViewPager2 内容区 -->
+    <androidx.viewpager2.widget.ViewPager2
+        android:id="@+id/settings_viewpager"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1" />

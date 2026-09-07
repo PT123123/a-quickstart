@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <ListPreference
+        android:key="window_size"
+        android:title="窗口大小"
+        android:summary="设置应用窗口大小"
+        android:defaultValue="full"
+        android:entries="@array/window_size_entries"
+        android:entryValues="@array/window_size_values" />
+
+    <SwitchPreferenceCompat
+        android:key="recent_app_dot"
+        android:title="最近更新圆点"
+        android:summary="在最近更新的应用图标上显示圆点提示"
+        android:defaultValue="true" />
+
+    <SwitchPreferenceCompat
+        android:key="pull_down_hover"
+        android:title="下拉悬停"
+        android:summary="在应用列表顶部快速向下滑动，列表下移让顶部应用到达下半屏，方便单手操作"
+        android:defaultValue="true" />
+
+    <SwitchPreferenceCompat
+        android:key="t9_auto_launch"
+        android:title="T9 搜索唯一匹配时自动启动"
+        android:summary="输入 T9 数字后如果只剩一个匹配的应用，自动启动它"
+        android:defaultValue="true" />
+
+    <ListPreference
+        android:key="recent_time_range"
+        android:title="最近更新范围"
+        android:summary="设置多长时间内更新的应用显示圆点"
+        android:defaultValue="432000000"
+        android:entries="@array/recent_time_entries"
+        android:entryValues="@array/recent_time_values" />
+
+</PreferenceScreen>

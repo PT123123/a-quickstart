@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <ListPreference
+        android:key="theme_mode"
+        android:title="主题模式"
+        android:summary="选择深色/浅色主题"
+        android:defaultValue="follow_system"
+        android:entries="@array/theme_entries"
+        android:entryValues="@array/theme_values" />
+
+    <ListPreference
+        android:key="columns"
+        android:title="列表列数"
+        android:summary="设置应用列表的列数"
+        android:defaultValue="3"
+        android:entries="@array/column_count_entries"
+        android:entryValues="@array/column_count_values" />
+
+    <Preference
+        android:key="font_color"
+        android:title="字体颜色"
+        android:summary="点击切换应用名称字体颜色" />
+
+    <Preference
+        android:key="background_color"
+        android:title="背景颜色"
+        android:summary="点击选择主界面背景颜色" />
+
+    <Preference
+        android:key="background_image"
+        android:title="图片背景"
+        android:summary="选择一张图片作为主界面背景" />
+
+    <ListPreference
+        android:key="background_blur"
+        android:title="背景模糊效果"
+        android:summary="选择背景图片的模糊/玻璃效果程度"
+        android:defaultValue="none"
+        android:entries="@array/background_blur_entries"
+        android:entryValues="@array/background_blur_values" />
+
+    <Preference
+        android:key="clear_background_image"
+        android:title="清除图片背景"
+        android:summary="恢复使用纯色背景" />
+
+</PreferenceScreen>

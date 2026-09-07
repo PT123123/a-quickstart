@@ -95,6 +95,13 @@ public final class FastCache {
         }
     }
 
+    /** 单个字段最大允许长度（防止损坏文件导致 OOM） */
+    private static final int MAX_FIELD_LENGTH = 1024;
+    /** 单个图标最大允许大小（512KB） */
+    private static final int MAX_ICON_SIZE = 512 * 1024;
+    /** 应用数量上限 */
+    private static final int MAX_APP_COUNT = 2000;
+
     /** 从二进制文件加载应用列表 */
     public static List<AppEntry> load(Context ctx) {
         File file = getCacheFile(ctx);
@@ -108,29 +115,40 @@ public final class FastCache {
             if (version != VERSION) return null;
 
             int count = dis.readInt();
+            // 校验数量合理性，防止损坏文件导致 OOM
+            if (count <= 0 || count > MAX_APP_COUNT) return null;
             List<AppEntry> out = new ArrayList<>(count);
 
             for (int i = 0; i < count; i++) {
                 // label
-                byte[] labelBytes = new byte[dis.readInt()];
+                int labelLen = dis.readInt();
+                if (labelLen <= 0 || labelLen > MAX_FIELD_LENGTH) { file.delete(); return null; }
+                byte[] labelBytes = new byte[labelLen];
                 dis.readFully(labelBytes);
                 String label = new String(labelBytes, "UTF-8");
 
                 // packageName
-                byte[] pkgBytes = new byte[dis.readInt()];
+                int pkgLen = dis.readInt();
+                if (pkgLen <= 0 || pkgLen > MAX_FIELD_LENGTH) { file.delete(); return null; }
+                byte[] pkgBytes = new byte[pkgLen];
                 dis.readFully(pkgBytes);
                 String pkg = new String(pkgBytes, "UTF-8");
 
                 // activityName
-                byte[] actBytes = new byte[dis.readInt()];
+                int actLen = dis.readInt();
+                if (actLen < 0 || actLen > MAX_FIELD_LENGTH) { file.delete(); return null; }
+                byte[] actBytes = new byte[actLen];
                 dis.readFully(actBytes);
                 String act = new String(actBytes, "UTF-8");
 
                 // fingerprints
                 int fpCount = dis.readInt();
+                if (fpCount < 0 || fpCount > 100) { file.delete(); return null; }
                 List<String> fp = new ArrayList<>(fpCount);
                 for (int j = 0; j < fpCount; j++) {
-                    byte[] fpBytes = new byte[dis.readInt()];
+                    int fpLen = dis.readInt();
+                    if (fpLen <= 0 || fpLen > MAX_FIELD_LENGTH) { file.delete(); return null; }
+                    byte[] fpBytes = new byte[fpLen];
                     dis.readFully(fpBytes);
                     fp.add(new String(fpBytes, "UTF-8"));
                 }
@@ -143,7 +161,9 @@ public final class FastCache {
                 // icon
                 boolean hasIcon = dis.readByte() != 0;
                 if (hasIcon) {
-                    byte[] iconBytes = new byte[dis.readInt()];
+                    int iconSize = dis.readInt();
+                    if (iconSize <= 0 || iconSize > MAX_ICON_SIZE) { file.delete(); return null; }
+                    byte[] iconBytes = new byte[iconSize];
                     dis.readFully(iconBytes);
                     entry.icon = bytesToDrawable(ctx, iconBytes);
                 }

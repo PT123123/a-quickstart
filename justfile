@@ -2,9 +2,8 @@
 build:
     ./gradlew assembleDebug
 
-# 构建并安装 debug APK 到连接的设备
+# 安装已构建的 debug APK 到连接的设备（不重新构建）
 install:
-    ./gradlew assembleDebug
     adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 # 清理构建产物
