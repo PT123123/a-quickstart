@@ -43,6 +43,18 @@ public final class IconCache {
     /** 预加载线程池 */
     private static final ExecutorService preloadExecutor = Executors.newFixedThreadPool(8);
 
+    /** 清除图标缓存（内存 + 磁盘） */
+    public static void clear(Context ctx) {
+        memoryCache.evictAll();
+        File dir = new File(ctx.getCacheDir(), "icons");
+        if (dir.exists()) {
+            File[] files = dir.listFiles();
+            if (files != null) {
+                for (File f : files) f.delete();
+            }
+        }
+    }
+
     /** 从缓存获取图标（先内存后磁盘） */
     public static Drawable get(Context ctx, String pkg) {
         Drawable cached = memoryCache.get(pkg);

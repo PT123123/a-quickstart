@@ -161,6 +161,12 @@ public final class FastCache {
         return getCacheFile(ctx).exists();
     }
 
+    /** 清除缓存文件 */
+    public static void clear(Context ctx) {
+        File file = getCacheFile(ctx);
+        if (file.exists()) file.delete();
+    }
+
     private static File getCacheFile(Context ctx) {
         return new File(ctx.getFilesDir(), CACHE_FILE);
     }

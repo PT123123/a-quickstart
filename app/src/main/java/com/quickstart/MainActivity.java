@@ -1110,6 +1110,39 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         // 角标由 Adapter 根据 position 自动显示，无需手动刷新
+        // 检查是否从设置页触发了强制刷新
+        boolean forceRefresh = getSharedPreferences("settings", MODE_PRIVATE)
+                .getBoolean("force_refresh_pending", false);
+        if (forceRefresh) {
+            getSharedPreferences("settings", MODE_PRIVATE).edit()
+                    .putBoolean("force_refresh_pending", false).apply();
+            refreshAppsFullScanWithCache();
+        }
+    }
+
+    /** 强制刷新：完整重扫（不读缓存），重新预加载图标并写缓存 */
+    private void refreshAppsFullScanWithCache() {
+        View loadingOverlay = findViewById(R.id.loading_overlay);
+        if (loadingOverlay != null) loadingOverlay.setVisibility(View.VISIBLE);
+
+        io.execute(() -> {
+            final List<AppEntry> loaded = AppLoader.loadLaunchableApps(MainActivity.this);
+            List<String> packages = new ArrayList<>();
+            for (AppEntry e : loaded) packages.add(e.packageName);
+            final List<AppEntry> finalLoaded = loaded;
+            IconCache.preloadAll(MainActivity.this, packages, () -> {
+                FastCache.save(MainActivity.this, finalLoaded);
+                preloadSortData(finalLoaded);
+                sortAllApps(finalLoaded);
+                java.util.Set<String> hidden = getHiddenPackages();
+                finalLoaded.removeIf(e -> hidden.contains(e.packageName));
+                main.post(() -> {
+                    allApps = finalLoaded;
+                    doFilter();
+                    if (loadingOverlay != null) loadingOverlay.setVisibility(View.GONE);
+                });
+            });
+        });
     }
 
     @Override

@@ -168,6 +168,21 @@ public class SettingsActivity extends AppCompatActivity {
                     return true;
                 });
             }
+
+            // 强制刷新应用列表
+            Preference forceRefresh = findPreference("force_refresh");
+            if (forceRefresh != null) {
+                forceRefresh.setOnPreferenceClickListener(pref -> {
+                    com.quickstart.util.FastCache.clear(requireContext());
+                    com.quickstart.util.IconCache.clear(requireContext());
+                    // 设置标志，返回主界面时触发完整重扫
+                    getPreferenceManager().getSharedPreferences()
+                            .edit().putBoolean("force_refresh_pending", true).apply();
+                    Toast.makeText(requireContext(),
+                            "缓存已清除，返回主界面将重新加载", Toast.LENGTH_SHORT).show();
+                    return true;
+                });
+            }
         }
 
         /** 根据搜索文本过滤设置项（public 供 Activity 调用） */
