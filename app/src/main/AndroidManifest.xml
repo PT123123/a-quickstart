@@ -63,6 +63,13 @@
             android:screenOrientation="portrait"
             android:theme="@style/AppTheme" />
 
+        <!-- 图片裁剪界面 -->
+        <activity
+            android:name=".ImageCropActivity"
+            android:exported="false"
+            android:label="裁剪图片"
+            android:theme="@style/AppTheme" />
+
         <!-- 广告跳过无障碍服务 -->
         <service
             android:name=".service.AdSkipAccessibilityService"

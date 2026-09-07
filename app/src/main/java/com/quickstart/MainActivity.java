@@ -3,6 +3,7 @@ package com.quickstart;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
@@ -26,12 +27,15 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.quickstart.adapter.AppListAdapter;
 import com.quickstart.model.AppEntry;
 import com.quickstart.util.AppLoader;
+import com.quickstart.util.BackgroundManager;
 import com.quickstart.util.FastCache;
 import com.quickstart.util.IconCache;
 import com.quickstart.util.KeyBindingHelper;
 import com.quickstart.util.SearchHistory;
 import com.quickstart.util.T9Matcher;
 
+import java.lang.ref.WeakReference;
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -65,6 +69,10 @@ public class MainActivity extends AppCompatActivity {
 
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
+    /** 主线程 Handler 的弱引用，供静态异步任务使用 */
+    private final WeakReference<Handler> mainHandlerRef = new WeakReference<>(main);
+    /** Activity 的弱引用，供定时刷新任务使用 */
+    private final WeakReference<MainActivity> activityRef = new WeakReference<>(this);
 
     /** 启动后定时刷新的间隔：30 分钟 */
     private static final long REFRESH_INTERVAL_MS = 30 * 60 * 1000L;
@@ -82,6 +90,7 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
         applyWindowSize();
         applyBackgroundColor();
+        measureBackgroundArea();
 
         sortLabel  = findViewById(R.id.sort_label);
         t9Hint     = findViewById(R.id.t9_hint);
@@ -98,6 +107,9 @@ public class MainActivity extends AppCompatActivity {
         recycler.setLayoutManager(new GridLayoutManager(this, columnCount));
         recycler.setAdapter(adapter);
         adapter.setColumnCount(columnCount);
+
+        // 应用列表动画设置
+        applyListAnimationSetting();
 
         // 应用设置
         boolean showDot = getSharedPreferences("settings", MODE_PRIVATE)
@@ -209,6 +221,32 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
+     * 应用列表动画设置：读取"list_animation"偏好，配置 RecyclerView 的 ItemAnimator。
+     * - off：关闭动画（setItemAnimator(null)）
+     * - 其他值（毫秒数）：设置 DefaultItemAnimator 的时长
+     */
+    private void applyListAnimationSetting() {
+        String value = getSharedPreferences("settings", MODE_PRIVATE)
+                .getString("list_animation", "off");
+        if ("off".equals(value)) {
+            recycler.setItemAnimator(null);
+        } else {
+            try {
+                long duration = Long.parseLong(value);
+                androidx.recyclerview.widget.DefaultItemAnimator animator =
+                        new androidx.recyclerview.widget.DefaultItemAnimator();
+                animator.setMoveDuration(duration);
+                animator.setAddDuration(duration);
+                animator.setRemoveDuration(duration);
+                animator.setChangeDuration(duration);
+                recycler.setItemAnimator(animator);
+            } catch (NumberFormatException e) {
+                recycler.setItemAnimator(null);
+            }
+        }
+    }
+
+    /**
      * 为单个按键设置手势：
      * - 单击（快速按下并释放）：T9 输入数字
      * - 长按（按住超过设定时长不移动）：启动该按键绑定的应用
@@ -313,6 +351,10 @@ public class MainActivity extends AppCompatActivity {
         if (!launched) {
             // 未绑定应用时，回退到启动搜索列表对应位置的应用
             launchAppAtDigit(digit);
+        } else {
+            // 绑定键启动成功也要清空输入
+            query.setLength(0);
+            onQueryChanged();
         }
     }
 
@@ -358,9 +400,11 @@ public class MainActivity extends AppCompatActivity {
         maybeAutoLaunch();
     }
 
-    /** 当输入匹配到唯一一个应用时，自动启动 */
+    /** 当输入匹配到唯一一个应用时，自动启动（需在设置中开启） */
     private void maybeAutoLaunch() {
-        if (filtered.size() == 1 && query.length() > 0) {
+        boolean autoLaunch = getSharedPreferences("settings", MODE_PRIVATE)
+                .getBoolean("t9_auto_launch", true);
+        if (autoLaunch && filtered.size() == 1 && query.length() > 0) {
             launchApp(filtered.get(0));
         }
     }
@@ -418,7 +462,7 @@ public class MainActivity extends AppCompatActivity {
         } else {
             emptyHint.setVisibility(View.GONE);
         }
-        recycler.setVisibility(filtered.isEmpty() ? View.GONE : View.VISIBLE);
+        // 始终保持 RecyclerView 可见，使空列表时仍能接收左右滑动手势切换分类
     }
 
     /** 空态提示文案：按当前筛选模式区分 */
@@ -583,14 +627,18 @@ public class MainActivity extends AppCompatActivity {
             SearchHistory.record(this, query.toString(), entry.packageName, entry.activityName);
         }
         try {
+            Intent targetIntent;
             if (entry.launchIntent != null) {
-                startActivity(entry.launchIntent);
+                targetIntent = entry.launchIntent;
             } else {
-                Intent intent = new Intent();
-                intent.setClassName(entry.packageName, entry.activityName);
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(intent);
+                targetIntent = new Intent();
+                targetIntent.setClassName(entry.packageName, entry.activityName);
+                targetIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             }
+            // 使用从中心缩放展开的启动动画，替代系统默认的横向滑动切换动画
+            android.app.ActivityOptions opts = android.app.ActivityOptions.makeCustomAnimation(
+                    this, R.anim.launch_scale_up, R.anim.no_anim);
+            startActivity(targetIntent, opts.toBundle());
             // 启动成功后清空输入并刷新列表（恢复全量显示）
             query.setLength(0);
             onQueryChanged();
@@ -797,14 +845,115 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /** 应用背景颜色 */
+    /**
+     * 应用背景：纯色打底 + 图片层。
+     *
+     * 图片只从「已生成好的文件」里挑一个解码显示，运行时不做任何模糊计算；
+     * 模糊图在裁剪完成 / 设置里切换档位时离线预生成。
+     */
     private void applyBackgroundColor() {
-        String color = getSharedPreferences("settings", MODE_PRIVATE)
-                .getString("background_color", "");
-        if (!color.isEmpty()) {
+        SharedPreferences sp = getSharedPreferences(BackgroundManager.PREFS, MODE_PRIVATE);
+        View bgContainer = findViewById(R.id.bg_container);
+        ImageView bgImage = findViewById(R.id.bg_image);
+
+        // 旧版本背景文件一次性迁移；模糊参数升级后作废旧图并后台重生成，生成完再刷一次
+        if (BackgroundManager.prepare(this)) {
+            BackgroundManager.generateAllAsync(this, (ok, err) -> {
+                if (!isDestroyed()) applyBackgroundColor();
+            });
+        }
+
+        // 1) 纯色兜底
+        int color = Color.TRANSPARENT;
+        String colorStr = sp.getString("background_color", "");
+        if (!colorStr.isEmpty()) {
             try {
-                findViewById(R.id.app_list).setBackgroundColor(Color.parseColor(color));
-            } catch (Exception ignored) {}
+                color = Color.parseColor(colorStr);
+            } catch (Exception ignored) {
+            }
+        }
+        if (bgContainer != null) bgContainer.setBackgroundColor(color);
+        if (bgImage == null) return;
+
+        // 背景层尺寸固定为参考尺寸，键盘收起时不再被拉伸
+        lockBackgroundSize(bgImage);
+
+        // 2) 图片层
+        String imagePath = sp.getString(BackgroundManager.PREF_IMAGE, "");
+        if (imagePath.isEmpty()) {
+            bgImage.setImageDrawable(null);
+            return;
+        }
+        final String mode = sp.getString(BackgroundManager.PREF_BLUR, BackgroundManager.NONE);
+        io.execute(() -> {
+            File file = BackgroundManager.getDisplayFile(MainActivity.this, mode);
+            if (file == null) {
+                main.post(() -> {
+                    if (!isDestroyed()) bgImage.setImageDrawable(null);
+                });
+                return;
+            }
+            int w = bgImage.getWidth();
+            int h = bgImage.getHeight();
+            if (w <= 0 || h <= 0) {
+                android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+                w = dm.widthPixels;
+                h = dm.heightPixels;
+            }
+            Bitmap bmp = BackgroundManager.decodeSampled(file, w, h);
+            main.post(() -> {
+                if (!isDestroyed()) bgImage.setImageBitmap(bmp);
+            });
+        });
+    }
+
+    /**
+     * 实测应用列表区域尺寸并持久化：
+     * 取「键盘收起时」的最大高度 = 当前列表高度 + 键盘高度，
+     * 背景层按这个尺寸固定住，键盘展开/收起时就不会再缩放。
+     */
+    private void measureBackgroundArea() {
+        View list = findViewById(R.id.app_list);
+        if (list == null) return;
+        list.post(() -> {
+            int w = list.getWidth();
+            int listH = list.getHeight();
+            if (w <= 0 || listH <= 0) return;
+
+            int keypadH = 0;
+            View keypadView = findViewById(R.id.keypad);
+            if (keypadView != null && keypadView.getVisibility() == View.VISIBLE) {
+                keypadH = keypadView.getHeight();
+            }
+            int maxH = listH + keypadH;   // 键盘收起后列表能占到的最大高度
+
+            SharedPreferences sp = getSharedPreferences(BackgroundManager.PREFS, MODE_PRIVATE);
+            float ratio = w / (float) maxH;
+            if (Math.abs(sp.getFloat(BackgroundManager.PREF_ASPECT, 0f) - ratio) < 0.005f
+                    && sp.getInt(BackgroundManager.PREF_AREA_W, 0) == w
+                    && sp.getInt(BackgroundManager.PREF_AREA_H, 0) == maxH) {
+                return;
+            }
+            sp.edit()
+                    .putFloat(BackgroundManager.PREF_ASPECT, ratio)
+                    .putInt(BackgroundManager.PREF_AREA_W, w)
+                    .putInt(BackgroundManager.PREF_AREA_H, maxH)
+                    .apply();
+            // 参考尺寸变了，重新按新尺寸铺一次背景
+            applyBackgroundColor();
+        });
+    }
+
+    /** 把背景层尺寸固定成参考尺寸，避免键盘收起时被拉伸 */
+    private void lockBackgroundSize(ImageView bgImage) {
+        if (bgImage == null) return;
+        int areaH = getSharedPreferences(BackgroundManager.PREFS, MODE_PRIVATE)
+                .getInt(BackgroundManager.PREF_AREA_H, 0);
+        if (areaH <= 0) return;
+        android.view.ViewGroup.LayoutParams lp = bgImage.getLayoutParams();
+        if (lp != null && lp.height != areaH) {
+            lp.height = areaH;
+            bgImage.setLayoutParams(lp);
         }
     }
 
@@ -903,18 +1052,36 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    /** 切换到下一个分类标签 */
+    /** 切换到下一个分类标签（带动画） */
     private void switchToNextCategory() {
         int currentIndex = getCurrentCategoryIndex();
         int nextIndex = (currentIndex + 1) % categoryList.length;
-        applyCategory(categoryList[nextIndex]);
+        animateCategoryChange(categoryList[nextIndex], true);
     }
 
-    /** 切换到上一个分类标签 */
+    /** 切换到上一个分类标签（带动画） */
     private void switchToPreviousCategory() {
         int currentIndex = getCurrentCategoryIndex();
         int prevIndex = (currentIndex - 1 + categoryList.length) % categoryList.length;
-        applyCategory(categoryList[prevIndex]);
+        animateCategoryChange(categoryList[prevIndex], false);
+    }
+
+    /**
+     * 执行带滑动动画的分类切换。
+     * @param newCategory 目标分类名称
+     * @param forward true 表示切换到下一个分类（列表从右侧滑入），false 表示切换到上一个（从左侧滑入）
+     */
+    private void animateCategoryChange(String newCategory, boolean forward) {
+        int offset = (int) (getResources().getDisplayMetrics().density * (forward ? 80 : -80));
+        recycler.setTranslationX(offset);
+        recycler.setAlpha(0.7f);
+        applyCategory(newCategory);
+        recycler.animate()
+                .translationX(0)
+                .alpha(1.0f)
+                .setDuration(250)
+                .setInterpolator(new android.view.animation.DecelerateInterpolator())
+                .start();
     }
 
     /** 获取当前分类在列表中的索引，未选中返回 -1 */
@@ -1035,75 +1202,140 @@ public class MainActivity extends AppCompatActivity {
         View loadingOverlay = findViewById(R.id.loading_overlay);
         if (loadingOverlay != null) loadingOverlay.setVisibility(View.VISIBLE);
 
-        io.execute(() -> {
-            // 1. 从二进制缓存快速加载（含图标数据）
-            final List<AppEntry> cached = FastCache.load(this);
+        new LoadAppsTask(this, loadingOverlay, main, () -> {
+            main.removeCallbacks(periodicRefresh);
+            main.postDelayed(periodicRefresh, REFRESH_INTERVAL_MS);
+        }).executeOn(io);
+    }
 
-            if (cached != null && !cached.isEmpty()) {
-                // 补齐启动 Intent + 预加载排序数据 + 排序（都在后台线程）
-                for (AppEntry e : cached) {
-                    if (e.launchIntent == null) {
-                        try {
-                            Intent intent = getPackageManager().getLaunchIntentForPackage(e.packageName);
-                            if (intent != null) {
-                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                                e.launchIntent = intent;
-                            }
-                        } catch (Throwable ignored) {}
+    /**
+     * 静态异步任务，通过 WeakReference 持有 Activity，避免内存泄露。
+     * 原匿名内部类通过 MainActivity.this 强引用 Activity，当 Activity 被销毁时
+     * 若后台线程仍在运行（如 IconCache.preloadAll 回调），会导致 Activity 无法被 GC 回收。
+     */
+    private static class LoadAppsTask {
+        private final WeakReference<MainActivity> activityRef;
+        private final WeakReference<View> loadingOverlayRef;
+        private final WeakReference<Handler> mainHandlerRef;
+        private final Runnable onComplete;
+
+        LoadAppsTask(MainActivity activity, View loadingOverlay, Handler mainHandler, Runnable onComplete) {
+            this.activityRef = new WeakReference<>(activity);
+            this.loadingOverlayRef = new WeakReference<>(loadingOverlay);
+            this.mainHandlerRef = new WeakReference<>(mainHandler);
+            this.onComplete = onComplete;
+        }
+
+        void executeOn(ExecutorService executor) {
+            executor.execute(() -> {
+                MainActivity activity = activityRef.get();
+                if (activity == null || activity.isDestroyed()) return;
+
+                // 1. 从二进制缓存快速加载（含图标数据）
+                final List<AppEntry> cached = FastCache.load(activity);
+
+                if (cached != null && !cached.isEmpty()) {
+                    // 补齐启动 Intent + 预加载排序数据 + 排序（都在后台线程）
+                    for (AppEntry e : cached) {
+                        if (e.launchIntent == null) {
+                            try {
+                                Intent intent = activity.getPackageManager().getLaunchIntentForPackage(e.packageName);
+                                if (intent != null) {
+                                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                    e.launchIntent = intent;
+                                }
+                            } catch (Throwable ignored) {}
+                        }
+                    }
+                    activity.preloadSortData(cached);
+                    activity.sortAllApps(cached);
+
+                    java.util.Set<String> hidden = activity.getHiddenPackages();
+                    cached.removeIf(e -> hidden.contains(e.packageName));
+
+                    Handler mainHandler = mainHandlerRef.get();
+                    if (mainHandler != null) {
+                        mainHandler.post(() -> {
+                            MainActivity a = activityRef.get();
+                            if (a == null || a.isDestroyed()) return;
+                            a.allApps = cached;
+                            a.doFilter();
+                            View overlay = loadingOverlayRef.get();
+                            if (overlay != null) overlay.setVisibility(View.GONE);
+                        });
                     }
                 }
-                preloadSortData(cached); // 预加载安装时间和启动次数
-                sortAllApps(cached);     // 排序
 
-                // 显示已排序的缓存列表（排除隐藏应用）
-                java.util.Set<String> hidden = getHiddenPackages();
-                cached.removeIf(e -> hidden.contains(e.packageName));
-                main.post(() -> {
-                    allApps = cached;
-                    doFilter();
-                    if (loadingOverlay != null) loadingOverlay.setVisibility(View.GONE);
-                });
-            }
+                // 2. 后台扫描最新应用列表
+                if (activity.isDestroyed()) return;
+                final List<AppEntry> loaded = AppLoader.loadLaunchableApps(activity);
 
-            // 2. 后台扫描最新应用列表
-            final List<AppEntry> loaded = AppLoader.loadLaunchableApps(MainActivity.this);
+                // 3. 预加载图标 + 排序数据 + 排序
+                final List<String> packages = new java.util.ArrayList<>();
+                for (AppEntry e : loaded) packages.add(e.packageName);
+                final List<AppEntry> finalLoaded = loaded;
 
-            // 3. 预加载图标 + 排序数据 + 排序
-            final List<String> packages = new java.util.ArrayList<>();
-            for (AppEntry e : loaded) packages.add(e.packageName);
-            final List<AppEntry> finalLoaded = loaded;
-            // IconCache.preloadAll 的回调在后台线程执行，这里的重活不会阻塞主线程
-            IconCache.preloadAll(MainActivity.this, packages, () -> {
-                FastCache.save(MainActivity.this, finalLoaded); // 保存到二进制缓存
-                preloadSortData(finalLoaded); // 重新预加载排序数据
-                sortAllApps(finalLoaded);     // 重新排序
+                if (activity.isDestroyed()) return;
+                IconCache.preloadAll(activity, packages, () -> {
+                    MainActivity a = activityRef.get();
+                    if (a == null || a.isDestroyed()) return;
 
-                // 更新 UI（排除隐藏应用）
-                java.util.Set<String> hidden2 = getHiddenPackages();
-                finalLoaded.removeIf(e -> hidden2.contains(e.packageName));
-                main.post(() -> {
-                    allApps = finalLoaded;
-                    doFilter();
-                    if (loadingOverlay != null) loadingOverlay.setVisibility(View.GONE);
-                    main.removeCallbacks(periodicRefresh);
-                    main.postDelayed(periodicRefresh, REFRESH_INTERVAL_MS);
+                    FastCache.save(a, finalLoaded);
+                    a.preloadSortData(finalLoaded);
+                    a.sortAllApps(finalLoaded);
+
+                    java.util.Set<String> hidden2 = a.getHiddenPackages();
+                    finalLoaded.removeIf(e -> hidden2.contains(e.packageName));
+
+                    Handler mainHandler = mainHandlerRef.get();
+                    if (mainHandler != null) {
+                        mainHandler.post(() -> {
+                            MainActivity act = activityRef.get();
+                            if (act == null || act.isDestroyed()) return;
+                            act.allApps = finalLoaded;
+                            act.doFilter();
+                            View overlay = loadingOverlayRef.get();
+                            if (overlay != null) overlay.setVisibility(View.GONE);
+                            if (onComplete != null) onComplete.run();
+                        });
+                    }
                 });
             });
-        });
+        }
     }
 
     /** 定时刷新：直接全量扫描（不读缓存），完成后写缓存并刷新 UI */
     private void refreshAppsFullScan() {
+        final WeakReference<Handler> handlerRef = mainHandlerRef;
         io.execute(() -> {
-            final List<AppEntry> loaded = AppLoader.loadLaunchableApps(this);
-            // 排除隐藏应用
-            java.util.Set<String> hidden = getHiddenPackages();
+            MainActivity activity = null;
+            // 通过 Handler 的 looper 获取主线程上下文检查 Activity 状态较复杂，
+            // 这里直接执行扫描，post 到主线程时检查 loadingOverlay 是否还可用
+            final List<AppEntry> loaded = AppLoader.loadLaunchableApps(activityRef.get());
+            activity = activityRef.get();
+            if (activity == null || activity.isDestroyed()) return;
+            java.util.Set<String> hidden = activity.getHiddenPackages();
             loaded.removeIf(e -> hidden.contains(e.packageName));
-            main.post(() -> {
-                allApps = loaded;
-                doFilter();
-            });
+            Handler h = handlerRef.get();
+            if (h != null) {
+                h.post(() -> {
+                    MainActivity a = activityRef.get();
+                    if (a == null || a.isDestroyed()) return;
+                    a.allApps = loaded;
+                    a.doFilter();
+                });
+            }
         });
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        // 切出应用时清空 T9 输入，切回后恢复空白状态
+        if (query.length() > 0) {
+            query.setLength(0);
+            onQueryChanged();
+        }
     }
 
     @Override
@@ -1125,24 +1357,57 @@ public class MainActivity extends AppCompatActivity {
         View loadingOverlay = findViewById(R.id.loading_overlay);
         if (loadingOverlay != null) loadingOverlay.setVisibility(View.VISIBLE);
 
-        io.execute(() -> {
-            final List<AppEntry> loaded = AppLoader.loadLaunchableApps(MainActivity.this);
-            List<String> packages = new ArrayList<>();
-            for (AppEntry e : loaded) packages.add(e.packageName);
-            final List<AppEntry> finalLoaded = loaded;
-            IconCache.preloadAll(MainActivity.this, packages, () -> {
-                FastCache.save(MainActivity.this, finalLoaded);
-                preloadSortData(finalLoaded);
-                sortAllApps(finalLoaded);
-                java.util.Set<String> hidden = getHiddenPackages();
-                finalLoaded.removeIf(e -> hidden.contains(e.packageName));
-                main.post(() -> {
-                    allApps = finalLoaded;
-                    doFilter();
-                    if (loadingOverlay != null) loadingOverlay.setVisibility(View.GONE);
+        new RefreshAppsTask(this, loadingOverlay, mainHandlerRef).executeOn(io);
+    }
+
+    /**
+     * 强制刷新异步任务（静态类，WeakReference 防泄露）
+     */
+    private static class RefreshAppsTask {
+        private final WeakReference<MainActivity> activityRef;
+        private final WeakReference<View> loadingOverlayRef;
+        private final WeakReference<Handler> mainHandlerRef;
+
+        RefreshAppsTask(MainActivity activity, View loadingOverlay, WeakReference<Handler> mainHandlerRef) {
+            this.activityRef = new WeakReference<>(activity);
+            this.loadingOverlayRef = new WeakReference<>(loadingOverlay);
+            this.mainHandlerRef = mainHandlerRef;
+        }
+
+        void executeOn(ExecutorService executor) {
+            executor.execute(() -> {
+                MainActivity activity = activityRef.get();
+                if (activity == null || activity.isDestroyed()) return;
+
+                final List<AppEntry> loaded = AppLoader.loadLaunchableApps(activity);
+                List<String> packages = new ArrayList<>();
+                for (AppEntry e : loaded) packages.add(e.packageName);
+                final List<AppEntry> finalLoaded = loaded;
+
+                IconCache.preloadAll(activity, packages, () -> {
+                    MainActivity a = activityRef.get();
+                    if (a == null || a.isDestroyed()) return;
+
+                    FastCache.save(a, finalLoaded);
+                    a.preloadSortData(finalLoaded);
+                    a.sortAllApps(finalLoaded);
+                    java.util.Set<String> hidden = a.getHiddenPackages();
+                    finalLoaded.removeIf(e -> hidden.contains(e.packageName));
+
+                    Handler mainHandler = mainHandlerRef.get();
+                    if (mainHandler != null) {
+                        mainHandler.post(() -> {
+                            MainActivity act = activityRef.get();
+                            if (act == null || act.isDestroyed()) return;
+                            act.allApps = finalLoaded;
+                            act.doFilter();
+                            View overlay = loadingOverlayRef.get();
+                            if (overlay != null) overlay.setVisibility(View.GONE);
+                        });
+                    }
                 });
             });
-        });
+        }
     }
 
     @Override

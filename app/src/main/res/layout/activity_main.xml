@@ -99,9 +99,21 @@
 
     <!-- ================= 中间应用列表区 ================= -->
     <FrameLayout
+        android:id="@+id/bg_container"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1">
+
+        <!-- 背景图片层：高度固定为「列表区最大高度」，顶部对齐。
+             键盘收起/展开时尺寸不变，因此不会跟着放大或缩小 -->
+        <ImageView
+            android:id="@+id/bg_image"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_gravity="top"
+            android:scaleType="centerCrop"
+            android:adjustViewBounds="false"
+            android:importantForAccessibility="no" />
 
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/app_list"

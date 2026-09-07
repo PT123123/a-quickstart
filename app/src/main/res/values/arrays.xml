@@ -82,4 +82,28 @@
         <item>400</item>
         <item>600</item>
     </string-array>
+
+    <string-array name="list_animation_entries">
+        <item>关闭</item>
+        <item>快速（100ms）</item>
+        <item>标准（250ms）</item>
+    </string-array>
+    <string-array name="list_animation_values">
+        <item>off</item>
+        <item>100</item>
+        <item>250</item>
+    </string-array>
+
+    <string-array name="background_blur_entries">
+        <item>无模糊</item>
+        <item>轻微模糊</item>
+        <item>中等模糊</item>
+        <item>强模糊（玻璃效果）</item>
+    </string-array>
+    <string-array name="background_blur_values">
+        <item>none</item>
+        <item>light</item>
+        <item>medium</item>
+        <item>heavy</item>
+    </string-array>
 </resources>

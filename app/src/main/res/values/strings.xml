@@ -6,4 +6,8 @@
 
     <string name="accessibility_service_description">开启后，快启动Pro 会自动点击广告中的「跳过」按钮。无需 ROOT。</string>
     <string name="accessibility_service_summary">自动跳过开屏广告</string>
+
+    <!-- 列表动画 -->
+    <string name="list_animation_title">列表动画</string>
+    <string name="list_animation_summary">T9 输入时应用列表重排的动画效果</string>
 </resources>

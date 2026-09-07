@@ -1,8 +1,11 @@
 package com.quickstart.util;
 
+import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+
+import com.quickstart.R;
 
 /**
  * 按键绑定工具类：读取绑定配置、启动绑定应用。
@@ -23,7 +26,16 @@ public final class KeyBindingHelper {
         try {
             Intent intent = ctx.getPackageManager().getLaunchIntentForPackage(pkg);
             if (intent != null) {
-                ctx.startActivity(intent);
+                // 若 Context 是 Activity，使用从中心缩放展开的启动动画
+                if (ctx instanceof Activity) {
+                    Activity activity = (Activity) ctx;
+                    android.app.ActivityOptions opts = android.app.ActivityOptions.makeCustomAnimation(
+                            activity, R.anim.launch_scale_up, R.anim.no_anim);
+                    activity.startActivity(intent, opts.toBundle());
+                } else {
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    ctx.startActivity(intent);
+                }
                 return true;
             }
         } catch (Throwable ignored) {
