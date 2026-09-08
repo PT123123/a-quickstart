@@ -164,6 +164,13 @@ public class CategoryPageFragment extends Fragment {
         }
     }
 
+    /** 列表瞬间滚回顶部（回到启动器时调用，保证第一行可见） */
+    public void scrollToTop() {
+        if (recycler != null) {
+            recycler.scrollToPosition(0);
+        }
+    }
+
     /** 提供外部查询 RecyclerView（用于下拉悬停等跨页手势） */
     @Nullable
     public RecyclerView getRecyclerView() {

@@ -1,10 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- 窗口切换动画：进入界面从中心缩放展开，被覆盖界面保持静止，
+         替代系统默认的左右滑动切换（与 launchApp 的 ActivityOptions 动画一致） -->
+    <style name="WindowZoomTransition">
+        <item name="android:activityOpenEnterAnimation">@anim/launch_scale_up</item>
+        <item name="android:activityOpenExitAnimation">@anim/no_anim</item>
+        <item name="android:activityCloseEnterAnimation">@anim/launch_scale_up</item>
+        <item name="android:activityCloseExitAnimation">@anim/no_anim</item>
+        <item name="android:taskOpenEnterAnimation">@anim/launch_scale_up</item>
+        <item name="android:taskOpenExitAnimation">@anim/no_anim</item>
+        <item name="android:taskCloseEnterAnimation">@anim/launch_scale_up</item>
+        <item name="android:taskCloseExitAnimation">@anim/no_anim</item>
+        <item name="android:taskToFrontEnterAnimation">@anim/launch_scale_up</item>
+        <item name="android:taskToFrontExitAnimation">@anim/no_anim</item>
+        <item name="android:taskToBackEnterAnimation">@anim/no_anim</item>
+        <item name="android:taskToBackExitAnimation">@anim/no_anim</item>
+    </style>
+
     <style name="AppTheme" parent="Theme.MaterialComponents.NoActionBar">
         <item name="colorPrimary">@color/primary</item>
         <item name="colorPrimaryDark">@color/primary_dark</item>
         <item name="colorAccent">@color/accent</item>
         <item name="android:windowBackground">@color/background</item>
         <item name="android:statusBarColor">@color/primary_dark</item>
+        <item name="android:windowAnimationStyle">@style/WindowZoomTransition</item>
     </style>
 </resources>
