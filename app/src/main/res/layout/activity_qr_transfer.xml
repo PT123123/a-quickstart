@@ -21,13 +21,44 @@
             android:background="#FFFFFF"
             android:contentDescription="配置二维码" />
 
-        <TextView
-            android:id="@+id/send_progress"
+        <LinearLayout
+            android:id="@+id/frame_nav"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:textSize="15sp"
-            android:textColor="?android:attr/textColorPrimary" />
+            android:layout_marginTop="12dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/btn_frame_prev"
+                android:layout_width="48dp"
+                android:layout_height="40dp"
+                android:gravity="center"
+                android:textSize="20sp"
+                android:text="◀"
+                android:textColor="?android:attr/textColorPrimary"
+                android:background="?attr/selectableItemBackgroundBorderless" />
+
+            <TextView
+                android:id="@+id/send_progress"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:paddingLeft="12dp"
+                android:paddingRight="12dp"
+                android:textSize="15sp"
+                android:textColor="?android:attr/textColorPrimary" />
+
+            <TextView
+                android:id="@+id/btn_frame_next"
+                android:layout_width="48dp"
+                android:layout_height="40dp"
+                android:gravity="center"
+                android:textSize="20sp"
+                android:text="▶"
+                android:textColor="?android:attr/textColorPrimary"
+                android:background="?attr/selectableItemBackgroundBorderless" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/send_hint"

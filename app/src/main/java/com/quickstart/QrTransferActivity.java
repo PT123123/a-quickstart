@@ -59,7 +59,6 @@ public class QrTransferActivity extends AppCompatActivity {
     public static final String MODE_SEND = "send";
     public static final String MODE_RECEIVE = "receive";
 
-    private static final long FRAME_INTERVAL_MS = 400;
     private static final int REQUEST_CAMERA_PERMISSION = 1001;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -70,15 +69,6 @@ public class QrTransferActivity extends AppCompatActivity {
     private TextView sendProgress;
     private Bitmap[] frameBitmaps;
     private int frameIndex = 0;
-    private final Runnable frameTicker = new Runnable() {
-        @Override
-        public void run() {
-            if (frameBitmaps != null && frameBitmaps.length > 1 && !isFinishing()) {
-                showFrame(frameIndex + 1);
-                mainHandler.postDelayed(this, FRAME_INTERVAL_MS);
-            }
-        }
-    };
 
     // ===== 接收端状态 =====
     private SurfaceView previewView;
@@ -133,7 +123,7 @@ public class QrTransferActivity extends AppCompatActivity {
         sendProgress = findViewById(R.id.send_progress);
         TextView sendHint = findViewById(R.id.send_hint);
         sendHint.setText("让另一台设备打开「快开启 → 设置 → 导入/导出配置 → 扫码接收其他设备的配置」，"
-                + "摄像头对准此屏幕即可。二维码自动循环播放，漏扫的帧会在下一轮自动补齐，全程无需联网。");
+                + "摄像头对准此屏幕即可。单帧直接扫码，多帧请手动翻页，漏扫的帧再翻回去补扫。");
         sendProgress.setText("正在生成二维码...");
 
         executor.execute(() -> {
@@ -150,7 +140,7 @@ public class QrTransferActivity extends AppCompatActivity {
                     frameBitmaps = bitmaps;
                     showFrame(0);
                     if (bitmaps.length > 1) {
-                        mainHandler.postDelayed(frameTicker, FRAME_INTERVAL_MS);
+                        findViewById(R.id.frame_nav).setVisibility(View.VISIBLE);
                     }
                 });
             } catch (Throwable t) {
@@ -159,13 +149,24 @@ public class QrTransferActivity extends AppCompatActivity {
                 });
             }
         });
+
+        findViewById(R.id.btn_frame_prev).setOnClickListener(v -> {
+            if (frameBitmaps != null && frameBitmaps.length > 1) {
+                showFrame(frameIndex - 1 + frameBitmaps.length);
+            }
+        });
+        findViewById(R.id.btn_frame_next).setOnClickListener(v -> {
+            if (frameBitmaps != null && frameBitmaps.length > 1) {
+                showFrame(frameIndex + 1);
+            }
+        });
     }
 
     private void showFrame(int index) {
         if (frameBitmaps == null || frameBitmaps.length == 0) return;
         frameIndex = index % frameBitmaps.length;
         qrImage.setImageBitmap(frameBitmaps[frameIndex]);
-        sendProgress.setText("第 " + (frameIndex + 1) + "/" + frameBitmaps.length + " 帧（自动循环播放）");
+        sendProgress.setText("第 " + (frameIndex + 1) + "/" + frameBitmaps.length + " 帧");
     }
 
     /** 生成二维码位图（黑底白字之外的纯黑白，纠错级别 M） */
