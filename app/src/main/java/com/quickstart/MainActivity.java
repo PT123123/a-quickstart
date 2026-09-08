@@ -876,6 +876,18 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         }
     }
 
+    /** 获取当前排序模式的整型常量（与 FastCache SORT_* 常量对应） */
+    private int getCurrentSortModeInt() {
+        String sortMode = getSharedPreferences("settings", MODE_PRIVATE)
+                .getString("sort_mode", "智能排序");
+        switch (sortMode) {
+            case "字母顺序": return com.quickstart.util.FastCache.SORT_ALPHA;
+            case "最近安装": return com.quickstart.util.FastCache.SORT_INSTALL_TIME;
+            case "使用频率": return com.quickstart.util.FastCache.SORT_LAUNCH_COUNT;
+            default: return com.quickstart.util.FastCache.SORT_SMART;
+        }
+    }
+
     /** 记录应用启动（次数 + 时间） */
     private void recordLaunch(String pkg) {
         SharedPreferences countSp = getSharedPreferences("app_launch_count", MODE_PRIVATE);
@@ -1303,10 +1315,29 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                 if (activity == null || activity.isDestroyed()) return;
 
                 // 1. 从二进制缓存快速加载（含图标数据）
-                final List<AppEntry> cached = FastCache.load(activity);
+                final com.quickstart.util.FastCache.CacheResult cacheResult =
+                        com.quickstart.util.FastCache.load(activity);
 
-                if (cached != null && !cached.isEmpty()) {
-                    // 补齐启动 Intent + 预加载排序数据 + 排序（都在后台线程）
+                if (cacheResult != null && !cacheResult.apps.isEmpty()) {
+                    final List<AppEntry> cached = cacheResult.apps;
+                    final int cachedSortMode = cacheResult.sortMode;
+                    final int currentSortMode = activity.getCurrentSortModeInt();
+
+                    // 阶段A：立即显示缓存列表（跳过 Intent 回填、排序、过滤，<5ms）
+                    Handler mainHandler = mainHandlerRef.get();
+                    if (mainHandler != null) {
+                        mainHandler.post(() -> {
+                            MainActivity a = activityRef.get();
+                            if (a == null || a.isDestroyed()) return;
+                            a.allApps = cached;
+                            a.doFilter();
+                            View overlay = loadingOverlayRef.get();
+                            if (overlay != null) overlay.setVisibility(View.GONE);
+                        });
+                    }
+
+                    // 阶段B：后台补齐（Intent 回填 + 排序模式检查 + 过滤）
+                    // 回填启动 Intent（ PackageManager 调用，约 50-80ms）
                     for (AppEntry e : cached) {
                         if (e.launchIntent == null) {
                             try {
@@ -1318,21 +1349,24 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                             } catch (Throwable ignored) {}
                         }
                     }
-                    activity.preloadSortData(cached);
-                    activity.sortAllApps(cached);
 
+                    // 如果排序模式与缓存不一致，需要重新排序（约 30-50ms）
+                    if (cachedSortMode != currentSortMode && currentSortMode != com.quickstart.util.FastCache.SORT_UNKNOWN) {
+                        activity.preloadSortData(cached);
+                        activity.sortAllApps(cached);
+                    }
+
+                    // 过滤隐藏应用
                     java.util.Set<String> hidden = activity.getHiddenPackages();
                     cached.removeIf(e -> hidden.contains(e.packageName));
 
-                    Handler mainHandler = mainHandlerRef.get();
+                    // 回到主线程更新列表（用户此时已看到列表，这次更新几乎无感知）
                     if (mainHandler != null) {
                         mainHandler.post(() -> {
                             MainActivity a = activityRef.get();
                             if (a == null || a.isDestroyed()) return;
                             a.allApps = cached;
                             a.doFilter();
-                            View overlay = loadingOverlayRef.get();
-                            if (overlay != null) overlay.setVisibility(View.GONE);
                         });
                     }
                 }
@@ -1351,9 +1385,11 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                     MainActivity a = activityRef.get();
                     if (a == null || a.isDestroyed()) return;
 
-                    FastCache.save(a, finalLoaded);
                     a.preloadSortData(finalLoaded);
                     a.sortAllApps(finalLoaded);
+
+                    // 写入缓存时记录当前排序模式
+                    FastCache.save(a, finalLoaded, a.getCurrentSortModeInt());
 
                     java.util.Set<String> hidden2 = a.getHiddenPackages();
                     finalLoaded.removeIf(e -> hidden2.contains(e.packageName));
@@ -1469,9 +1505,11 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                     MainActivity a = activityRef.get();
                     if (a == null || a.isDestroyed()) return;
 
-                    FastCache.save(a, finalLoaded);
                     a.preloadSortData(finalLoaded);
                     a.sortAllApps(finalLoaded);
+
+                    FastCache.save(a, finalLoaded, a.getCurrentSortModeInt());
+
                     java.util.Set<String> hidden = a.getHiddenPackages();
                     finalLoaded.removeIf(e -> hidden.contains(e.packageName));
 

@@ -20,9 +20,10 @@ import java.util.List;
  * 快速二进制缓存：将整个应用列表+图标序列化到单个文件。
  * 比 JSON + 独立 PNG 文件快得多（单次读写 vs 数百次）。
  *
- * 文件格式：
+ * 文件格式（v2）：
  * [magic: 4 bytes "APPL"]
- * [version: 4 bytes int]
+ * [version: 4 bytes int] = 2
+ * [sortMode: 4 bytes int] 排序模式枚举（0=智能, 1=字母, 2=安装时间, 3=频率）
  * [count: 4 bytes int]
  * 每条记录：
  *   [labelLength: 4 bytes][label bytes UTF-8]
@@ -36,18 +37,42 @@ import java.util.List;
  */
 public final class FastCache {
 
+    /** 缓存结果包装：应用列表 + 缓存时的排序模式 */
+    public static final class CacheResult {
+        public final List<AppEntry> apps;
+        /** 缓存时使用的排序模式（SORT_* 常量），未知返回 -1 */
+        public final int sortMode;
+
+        public CacheResult(List<AppEntry> apps, int sortMode) {
+            this.apps = apps;
+            this.sortMode = sortMode;
+        }
+    }
+
+    public static final int SORT_SMART = 0;
+    public static final int SORT_ALPHA = 1;
+    public static final int SORT_INSTALL_TIME = 2;
+    public static final int SORT_LAUNCH_COUNT = 3;
+    public static final int SORT_UNKNOWN = -1;
+
     private static final String CACHE_FILE = "app_list.cache";
     private static final int MAGIC = 0x4150504C; // "APPL"
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
 
     private FastCache() {}
 
     /** 保存应用列表到二进制文件（后台线程调用） */
     public static void save(Context ctx, List<AppEntry> apps) {
+        save(ctx, apps, SORT_SMART);
+    }
+
+    /** 保存应用列表到二进制文件，同时记录排序模式（后台线程调用） */
+    public static void save(Context ctx, List<AppEntry> apps, int sortMode) {
         File file = getCacheFile(ctx);
         try (DataOutputStream dos = new DataOutputStream(new FileOutputStream(file))) {
             dos.writeInt(MAGIC);
             dos.writeInt(VERSION);
+            dos.writeInt(sortMode);
             dos.writeInt(apps.size());
 
             for (AppEntry e : apps) {
@@ -102,8 +127,8 @@ public final class FastCache {
     /** 应用数量上限 */
     private static final int MAX_APP_COUNT = 2000;
 
-    /** 从二进制文件加载应用列表 */
-    public static List<AppEntry> load(Context ctx) {
+    /** 从二进制文件加载应用列表（兼容旧格式，旧格式 sortMode 返回 SORT_UNKNOWN） */
+    public static CacheResult load(Context ctx) {
         File file = getCacheFile(ctx);
         if (!file.exists()) return null;
 
@@ -112,7 +137,12 @@ public final class FastCache {
             if (magic != MAGIC) return null;
 
             int version = dis.readInt();
-            if (version != VERSION) return null;
+            if (version < 1 || version > VERSION) { file.delete(); return null; }
+
+            int sortMode = SORT_UNKNOWN;
+            if (version >= 2) {
+                sortMode = dis.readInt();
+            }
 
             int count = dis.readInt();
             // 校验数量合理性，防止损坏文件导致 OOM
@@ -170,7 +200,7 @@ public final class FastCache {
 
                 out.add(entry);
             }
-            return out;
+            return new CacheResult(out, sortMode);
         } catch (IOException e) {
             file.delete(); // 读取失败删除损坏文件
             return null;
