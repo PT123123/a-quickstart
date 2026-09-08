@@ -76,6 +76,8 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
     private boolean pullDownHoverActive = false;
     /** 是否正在执行悬停动画（忽略此期间的滚动事件） */
     private boolean isAnimatingHover = false;
+    /** 悬停位移动画引用（复位时需要取消） */
+    private android.animation.ValueAnimator hoverAnimator;
 
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -1259,10 +1261,33 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         animateTranslationY(PULL_DOWN_HOVER_OFFSET, 0);
     }
 
+    /**
+     * 回到启动器时复位列表状态：立即归位下拉悬停偏移，
+     * 并把所有已创建分类页的列表瞬间滚回顶部（第一行可见）。
+     */
+    private void resetListToTop() {
+        // 取消进行中的悬停动画并立即归位
+        if (hoverAnimator != null) {
+            hoverAnimator.cancel();
+            hoverAnimator = null;
+        }
+        pullDownHoverActive = false;
+        isAnimatingHover = false;
+        viewPager.setTranslationY(0);
+
+        // 所有已创建的分类页列表滚回顶部
+        for (androidx.fragment.app.Fragment f : getSupportFragmentManager().getFragments()) {
+            if (f instanceof CategoryPageFragment && f.isAdded()) {
+                ((CategoryPageFragment) f).scrollToTop();
+            }
+        }
+    }
+
     /** 平滑过渡 translationY */
     private void animateTranslationY(float from, float to) {
         isAnimatingHover = true;
         android.animation.ValueAnimator animator = android.animation.ValueAnimator.ofFloat(from, to);
+        hoverAnimator = animator;
         animator.setDuration(300);
         animator.setInterpolator(new android.view.animation.DecelerateInterpolator());
         animator.addUpdateListener(animation -> {
@@ -1459,6 +1484,8 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                 query.setLength(0);
                 onQueryChanged();
             }
+            // 回到启动器：应用列表滚回顶部（第一行可见），并复位下拉悬停
+            resetListToTop();
         }
         // 角标由 Adapter 根据 position 自动显示，无需手动刷新
         // 检查是否从设置页触发了强制刷新
