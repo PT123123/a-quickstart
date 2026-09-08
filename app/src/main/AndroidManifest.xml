@@ -13,6 +13,8 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
+        <!-- 微信包可见性声明，确保 resolveActivity() 在 Android 11+ 上能正常工作 -->
+        <package android:name="com.tencent.mm" />
     </queries>
 
     <application

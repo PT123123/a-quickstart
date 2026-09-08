@@ -74,9 +74,10 @@ public final class AppLoader {
      */
     private static void addWeChatShortcuts(Context ctx, List<AppEntry> out) {
         String wechatPkg = "com.tencent.mm";
+        PackageManager pm = ctx.getPackageManager();
         try {
             // 检查微信是否安装
-            ctx.getPackageManager().getPackageInfo(wechatPkg, 0);
+            pm.getPackageInfo(wechatPkg, 0);
         } catch (Throwable e) {
             return; // 微信未安装，跳过
         }
@@ -85,7 +86,7 @@ public final class AppLoader {
         Drawable wechatIcon = IconCache.get(ctx, wechatPkg);
         if (wechatIcon == null) {
             try {
-                wechatIcon = ctx.getPackageManager().getApplicationIcon(wechatPkg);
+                wechatIcon = pm.getApplicationIcon(wechatPkg);
                 IconCache.put(ctx, wechatPkg, wechatIcon);
             } catch (Throwable ignored) {}
         }
@@ -95,13 +96,14 @@ public final class AppLoader {
                 T9Matcher.buildFingerprints("微信扫一扫"));
         scanEntry.icon = wechatIcon;
         scanEntry.recentlyUpdated = false;
-        // 微信扫一扫的启动 Intent
-        try {
-            Intent scanIntent = new Intent();
-            scanIntent.setClassName(wechatPkg, "com.tencent.mm.ui.ScanCodeUI");
-            scanIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            scanEntry.launchIntent = scanIntent;
-        } catch (Throwable ignored) {}
+        // 微信扫一扫：通过 getLaunchIntentForPackage + Extra 触发
+        Intent scanIntent = pm.getLaunchIntentForPackage(wechatPkg);
+        if (scanIntent != null) {
+            scanIntent.putExtra("LauncherUI.From.Scaner.Shortcut", true);
+            scanIntent.setAction(Intent.ACTION_VIEW);
+            scanIntent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
+        }
+        scanEntry.launchIntent = scanIntent;
         out.add(scanEntry);
 
         // 微信付款码（T9 指纹由 buildFingerprints 从标签自动生成：全拼/首字母/原始字母）
@@ -109,13 +111,14 @@ public final class AppLoader {
                 T9Matcher.buildFingerprints("微信付款码"));
         payEntry.icon = wechatIcon;
         payEntry.recentlyUpdated = false;
-        // 微信付款码的启动 Intent
-        try {
-            Intent payIntent = new Intent();
-            payIntent.setClassName(wechatPkg, "com.tencent.mm.plugin.offline.ui.CoinPurseUI");
-            payIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            payEntry.launchIntent = payIntent;
-        } catch (Throwable ignored) {}
+        // 微信付款码：通过 getLaunchIntentForPackage + Extra 触发
+        Intent payIntent = pm.getLaunchIntentForPackage(wechatPkg);
+        if (payIntent != null) {
+            payIntent.putExtra("LauncherUI.Shortcut.LaunchType", "launch_type_offline_wallet");
+            payIntent.setAction(Intent.ACTION_VIEW);
+            payIntent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
+        }
+        payEntry.launchIntent = payIntent;
         out.add(payEntry);
     }
 
