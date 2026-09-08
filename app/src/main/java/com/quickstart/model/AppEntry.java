@@ -14,6 +14,9 @@ public class AppEntry {
     public Intent launchIntent;          // 缓存的启动 Intent（由 PackageManager 构造）
     public boolean recentlyUpdated;      // 是否是最近更新的应用
 
+    // 新增：预计算的增强指纹，用于混合输入匹配
+    public List<String> enhancedPatterns;
+
     public AppEntry(String label, String packageName, String activityName, List<String> fingerprints) {
         this.label = label;
         this.packageName = packageName;

@@ -45,4 +45,7 @@ dependencies {
 
     // ProcessLifecycleOwner: 监听 APP 前后台切换
     implementation 'androidx.lifecycle:lifecycle-process:2.7.0'
+
+    // 单元测试
+    testImplementation 'junit:junit:4.13.2'
 }
