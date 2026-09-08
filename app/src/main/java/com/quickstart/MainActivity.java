@@ -458,10 +458,11 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
     }
 
     private String buildHint() {
-        if (query.length() == 0) return "可以输入 '577' 来搜索 '计算器'";
+        if (query.length() == 0) return "可以输入 'wx' 或 'weixin' 来搜索 '微信'";
         String q = query.toString();
         for (AppEntry e : allApps) {
-            if (T9Matcher.matches(q, e.fingerprints)) {
+            // 使用增强匹配检查是否有应用能被搜索到
+            if (T9Matcher.matchesEnhanced(q, e)) {
                 return "输入 '" + q + "' 可搜索 '" + e.label + "'";
             }
         }
@@ -493,7 +494,8 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         } else {
             for (AppEntry e : allApps) {
                 if (hidden.contains(e.packageName)) continue;
-                boolean matchQuery = q.isEmpty() || T9Matcher.matches(q, e.fingerprints);
+                // 使用增强匹配：支持混合输入、英文分词、中英混合等
+                boolean matchQuery = q.isEmpty() || T9Matcher.matchesEnhanced(q, e);
                 // query 非空时全局搜索（忽略分类），query 为空时按分类过滤
                 boolean matchCat = !q.isEmpty() || currentCategory == null || matchCategory(e, currentCategory);
                 if (matchQuery && matchCat) filtered.add(e);
@@ -535,10 +537,10 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         } else if (q.isEmpty() && "最近安装".equals(category)) {
             pageFiltered = buildRecentlyInstalled(hidden);
         } else if (!q.isEmpty()) {
-            // T9 搜索：全局搜索，忽略分类限制
+            // T9 搜索：全局搜索，忽略分类限制，使用增强匹配
             for (AppEntry e : allApps) {
                 if (hidden.contains(e.packageName)) continue;
-                if (T9Matcher.matches(q, e.fingerprints)) {
+                if (T9Matcher.matchesEnhanced(q, e)) {
                     pageFiltered.add(e);
                 }
             }

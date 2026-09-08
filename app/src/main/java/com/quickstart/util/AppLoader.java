@@ -24,6 +24,15 @@ public final class AppLoader {
     private AppLoader() {}
 
     /**
+     * 统一的条目构造：T9 数字指纹 + 增强指纹（混合输入匹配用）一次性预计算。
+     */
+    private static AppEntry createEntry(String label, String pkg, String act) {
+        AppEntry e = new AppEntry(label, pkg, act, T9Matcher.buildFingerprints(label));
+        e.enhancedPatterns = T9Matcher.buildEnhancedPatterns(label);
+        return e;
+    }
+
+    /**
      * 加载应用元数据（不含图标加载阻塞）。
      * 图标尝试从缓存瞬时获取，没有则留空由 Adapter 延迟加载。
      */
@@ -38,8 +47,7 @@ public final class AppLoader {
             String label = ri.loadLabel(pm).toString();
             String pkg  = ri.activityInfo.packageName;
             String act  = ri.activityInfo.name;
-            List<String> fp = T9Matcher.buildFingerprints(label);
-            AppEntry entry = new AppEntry(label, pkg, act, fp);
+            AppEntry entry = createEntry(label, pkg, act);
 
             // 构造启动 Intent
             Intent launch = pm.getLaunchIntentForPackage(pkg);
@@ -190,8 +198,7 @@ public final class AppLoader {
         out.add(scanEntry);
 
         // 支付宝付款码（URL Scheme: alipayqr://platformapi/startapp?saId=20000056）
-        AppEntry payEntry = new AppEntry("支付宝付款码", alipayPkg, "",
-                T9Matcher.buildFingerprints("支付宝付款码"));
+        AppEntry payEntry = createEntry("支付宝付款码", alipayPkg, "");
         payEntry.icon = alipayIcon;
         payEntry.recentlyUpdated = false;
         Intent payIntent = new Intent(Intent.ACTION_VIEW,
