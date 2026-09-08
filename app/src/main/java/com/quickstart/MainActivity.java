@@ -20,9 +20,17 @@ import android.widget.PopupMenu;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.fragment.app.Fragment;
+import androidx.fragment.app.FragmentActivity;
+import androidx.lifecycle.DefaultLifecycleObserver;
+import androidx.lifecycle.LifecycleOwner;
+import androidx.lifecycle.ProcessLifecycleOwner;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
+import androidx.viewpager2.adapter.FragmentStateAdapter;
+import androidx.viewpager2.widget.ViewPager2;
 
 import com.quickstart.adapter.AppListAdapter;
 import com.quickstart.model.AppEntry;
@@ -41,10 +49,10 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends AppCompatActivity implements CategoryPageFragment.Callbacks {
 
     private TextView sortLabel, t9Hint, t9Display, emptyHint;
-    private RecyclerView recycler;
+    private ViewPager2 viewPager;
     private View keypad;
     private AppListAdapter adapter;
 
@@ -52,6 +60,8 @@ public class MainActivity extends AppCompatActivity {
     private List<AppEntry> filtered = new ArrayList<>();
     private StringBuilder query = new StringBuilder();
     private String currentCategory = null;
+    /** 进程进入后台时置 true，onResume 据此决定是否清空输入 */
+    private boolean pendingQueryClear = false;
     /** 当前「最近搜索」分类的历史键集合（包名/Activity），非该分类时为 null */
     private java.util.Set<String> searchHistoryKeys;
 
@@ -84,9 +94,18 @@ public class MainActivity extends AppCompatActivity {
         }
     };
 
+    /** 每页的 Adapter 实例（与 Fragment 一一对应），由 FragmentStateAdapter 在创建 Fragment 时注入 */
+    private final List<AppListAdapter> pageAdapters = new ArrayList<>();
+    /** 当前列表动画设置值，供 Fragment 创建时应用 */
+    private String listAnimationValue = "off";
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // 进程被杀重建时恢复"需要清空输入"标志
+        if (savedInstanceState != null) {
+            pendingQueryClear = savedInstanceState.getBoolean("pending_query_clear", false);
+        }
         setContentView(R.layout.activity_main);
         applyWindowSize();
         applyBackgroundColor();
@@ -96,7 +115,7 @@ public class MainActivity extends AppCompatActivity {
         t9Hint     = findViewById(R.id.t9_hint);
         t9Display  = findViewById(R.id.t9_display);
         emptyHint  = findViewById(R.id.empty_hint);
-        recycler   = findViewById(R.id.app_list);
+        viewPager  = findViewById(R.id.app_list);
         keypad     = findViewById(R.id.keypad);
 
         adapter = new AppListAdapter();
@@ -104,9 +123,30 @@ public class MainActivity extends AppCompatActivity {
         adapter.setOnAppLongClickListener(this::showAppMenu);
 
         int columnCount = getColumnCount();
-        recycler.setLayoutManager(new GridLayoutManager(this, columnCount));
-        recycler.setAdapter(adapter);
         adapter.setColumnCount(columnCount);
+
+        // 初始化每页的 Adapter（与 Fragment 一一对应）
+        for (int i = 0; i <= categoryList.length; i++) {
+            AppListAdapter pageAdapter = new AppListAdapter();
+            pageAdapter.setOnAppClickListener(this::launchApp);
+            pageAdapter.setOnAppLongClickListener(this::showAppMenu);
+            pageAdapter.setColumnCount(columnCount);
+            pageAdapters.add(pageAdapter);
+        }
+
+        // ViewPager2 使用 FragmentStateAdapter：每个 page 是一个 Fragment（内部放 RecyclerView）
+        // 这是 ViewPager2 连续滑动过渡的必要条件：如果 page 直接是 RecyclerView，
+        // 内部的 RV 会拦截所有横向滑动事件，导致 ViewPager2 无法切页
+        viewPager.setAdapter(new CategoryPagerAdapter(this));
+        viewPager.setOffscreenPageLimit(2); // 预加载左右两页，保证连续滑动时相邻页已渲染
+        viewPager.registerOnPageChangeCallback(new ViewPager2.OnPageChangeCallback() {
+            @Override
+            public void onPageSelected(int position) {
+                // 页切换同步分类标签
+                String category = position == 0 ? null : categoryList[position - 1];
+                syncCategoryToPage(category);
+            }
+        });
 
         // 应用列表动画设置
         applyListAnimationSetting();
@@ -115,6 +155,7 @@ public class MainActivity extends AppCompatActivity {
         boolean showDot = getSharedPreferences("settings", MODE_PRIVATE)
                 .getBoolean("recent_app_dot", true);
         adapter.setShowRecentDot(showDot);
+        for (AppListAdapter a : pageAdapters) a.setShowRecentDot(showDot);
 
         // 依赖 adapter，必须在其初始化之后调用
         applyFontColor();
@@ -137,9 +178,16 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
+        // 监听 APP 前后台切换：进入后台时标记需要清空输入
+        ProcessLifecycleOwner.get().getLifecycle().addObserver(new DefaultLifecycleObserver() {
+            @Override
+            public void onStop(@NonNull LifecycleOwner owner) {
+                pendingQueryClear = true;
+            }
+        });
+
         setupKeypad();
         setupCategoryChips();
-        setupSwipeToSwitchCategory();
         setupPullDownHover();
         loadAppsAsync();
     }
@@ -158,12 +206,16 @@ public class MainActivity extends AppCompatActivity {
         keypad.findViewById(R.id.key_clear).setOnClickListener(v -> clearQuery());
         keypad.findViewById(R.id.key_back).setOnClickListener(v -> onBackspace());
 
-        // 设置角标手势回调
-        adapter.setOnBadgeGestureListener(position -> {
+        // 设置角标手势回调（主 adapter + 所有页 adapter）
+        AppListAdapter.OnBadgeGestureListener badgeCallback = position -> {
             if (position < filtered.size()) {
                 launchApp(filtered.get(position));
             }
-        });
+        };
+        adapter.setOnBadgeGestureListener(badgeCallback);
+        for (AppListAdapter a : pageAdapters) {
+            a.setOnBadgeGestureListener(badgeCallback);
+        }
 
         // 加载数字键绑定图标
         loadKeyBindingIcons();
@@ -228,21 +280,17 @@ public class MainActivity extends AppCompatActivity {
     private void applyListAnimationSetting() {
         String value = getSharedPreferences("settings", MODE_PRIVATE)
                 .getString("list_animation", "off");
-        if ("off".equals(value)) {
-            recycler.setItemAnimator(null);
-        } else {
-            try {
-                long duration = Long.parseLong(value);
-                androidx.recyclerview.widget.DefaultItemAnimator animator =
-                        new androidx.recyclerview.widget.DefaultItemAnimator();
-                animator.setMoveDuration(duration);
-                animator.setAddDuration(duration);
-                animator.setRemoveDuration(duration);
-                animator.setChangeDuration(duration);
-                recycler.setItemAnimator(animator);
-            } catch (NumberFormatException e) {
-                recycler.setItemAnimator(null);
-            }
+        listAnimationValue = value;
+        // 应用到所有已创建的 Fragment 中的 RecyclerView
+        updateAllFragments(f -> f.applyListAnimation(value));
+    }
+
+    /** 遍历所有已创建的 Fragment（用于应用设置变更） */
+    private void updateAllFragments(java.util.function.Consumer<CategoryPageFragment> action) {
+        for (int i = 0; i <= categoryList.length; i++) {
+            CategoryPageFragment f = (CategoryPageFragment) getSupportFragmentManager()
+                    .findFragmentByTag("f" + i);
+            if (f != null) action.accept(f);
         }
     }
 
@@ -446,7 +494,8 @@ public class MainActivity extends AppCompatActivity {
             for (AppEntry e : allApps) {
                 if (hidden.contains(e.packageName)) continue;
                 boolean matchQuery = q.isEmpty() || T9Matcher.matches(q, e.fingerprints);
-                boolean matchCat = currentCategory == null || matchCategory(e, currentCategory);
+                // query 非空时全局搜索（忽略分类），query 为空时按分类过滤
+                boolean matchCat = !q.isEmpty() || currentCategory == null || matchCategory(e, currentCategory);
                 if (matchQuery && matchCat) filtered.add(e);
             }
             // 有搜索词时按权重排序（使用频率 + 最近使用时间）
@@ -463,6 +512,46 @@ public class MainActivity extends AppCompatActivity {
             emptyHint.setVisibility(View.GONE);
         }
         // 始终保持 RecyclerView 可见，使空列表时仍能接收左右滑动手势切换分类
+
+        // 更新所有页 Adapter（T9 搜索时所有页都显示全局结果，无搜索时按分类过滤）
+        for (int page = 0; page < pageAdapters.size(); page++) {
+            String category = page == 0 ? null : categoryList[page - 1];
+            filterPage(pageAdapters.get(page), q, category, hidden);
+        }
+    }
+
+    private void filterPage(AppListAdapter pageAdapter, String q, String category, java.util.Set<String> hidden) {
+        List<AppEntry> pageFiltered = new ArrayList<>();
+
+        if (q.isEmpty() && category == null) {
+            // 无搜索 + 无分类 = 全部应用
+            for (AppEntry e : allApps) {
+                if (!hidden.contains(e.packageName)) pageFiltered.add(e);
+            }
+        } else if (q.isEmpty() && "最近搜索".equals(category)) {
+            pageFiltered = buildRecentSearched(hidden);
+        } else if (q.isEmpty() && "最近使用".equals(category)) {
+            pageFiltered = buildRecentlyUsed(hidden);
+        } else if (q.isEmpty() && "最近安装".equals(category)) {
+            pageFiltered = buildRecentlyInstalled(hidden);
+        } else if (!q.isEmpty()) {
+            // T9 搜索：全局搜索，忽略分类限制
+            for (AppEntry e : allApps) {
+                if (hidden.contains(e.packageName)) continue;
+                if (T9Matcher.matches(q, e.fingerprints)) {
+                    pageFiltered.add(e);
+                }
+            }
+            sortBySearchWeight(pageFiltered, q);
+        } else {
+            // 有分类但无搜索词
+            for (AppEntry e : allApps) {
+                if (hidden.contains(e.packageName)) continue;
+                if (matchCategory(e, category)) pageFiltered.add(e);
+            }
+        }
+        pageAdapter.setHighlightQuery(q);
+        pageAdapter.submit(pageFiltered);
     }
 
     /** 空态提示文案：按当前筛选模式区分 */
@@ -913,11 +1002,10 @@ public class MainActivity extends AppCompatActivity {
      * 背景层按这个尺寸固定住，键盘展开/收起时就不会再缩放。
      */
     private void measureBackgroundArea() {
-        View list = findViewById(R.id.app_list);
-        if (list == null) return;
-        list.post(() -> {
-            int w = list.getWidth();
-            int listH = list.getHeight();
+        if (viewPager == null) return;
+        viewPager.post(() -> {
+            int w = viewPager.getWidth();
+            int listH = viewPager.getHeight();
             if (w <= 0 || listH <= 0) return;
 
             int keypadH = 0;
@@ -963,7 +1051,10 @@ public class MainActivity extends AppCompatActivity {
                 .getString("font_color", "");
         if (!color.isEmpty()) {
             try {
-                adapter.setFontColor(Color.parseColor(color));
+                int fontColor = Color.parseColor(color);
+                adapter.setFontColor(fontColor);
+                for (AppListAdapter a : pageAdapters) a.setFontColor(fontColor);
+                updateAllFragments(f -> f.setFontColor(fontColor));
             } catch (Exception ignored) {}
         }
     }
@@ -1004,86 +1095,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /**
-     * 设置左右滑动切换分类标签：
-     * 在 RecyclerView 上检测水平滑动手势，左滑切换到下一个标签，右滑切换到上一个标签。
-     */
-    private void setupSwipeToSwitchCategory() {
-        GestureDetector gestureDetector = new GestureDetector(this,
-                new GestureDetector.SimpleOnGestureListener() {
-                    private static final int SWIPE_THRESHOLD = 80;
-                    private static final int SWIPE_VELOCITY_THRESHOLD = 100;
-
-                    @Override
-                    public boolean onFling(MotionEvent e1, MotionEvent e2,
-                                           float velocityX, float velocityY) {
-                        if (e1 == null || e2 == null) return false;
-                        float dx = e2.getX() - e1.getX();
-                        float dy = e2.getY() - e1.getY();
-                        // 水平滑动且速度足够，垂直位移小于水平位移（避免误触滚动）
-                        if (Math.abs(dx) > SWIPE_THRESHOLD
-                                && Math.abs(velocityX) > SWIPE_VELOCITY_THRESHOLD
-                                && Math.abs(dx) > Math.abs(dy)) {
-                            if (dx < 0) {
-                                switchToNextCategory(); // 左滑 → 下一个
-                            } else {
-                                switchToPreviousCategory(); // 右滑 → 上一个
-                            }
-                            return true;
-                        }
-                        return false;
-                    }
-                });
-
-        recycler.addOnItemTouchListener(new RecyclerView.OnItemTouchListener() {
-            @Override
-            public boolean onInterceptTouchEvent(RecyclerView rv, MotionEvent e) {
-                gestureDetector.onTouchEvent(e);
-                return false; // 不拦截，让 RecyclerView 正常处理滚动
-            }
-
-            @Override
-            public void onTouchEvent(RecyclerView rv, MotionEvent e) {
-                gestureDetector.onTouchEvent(e);
-            }
-
-            @Override
-            public void onRequestDisallowInterceptTouchEvent(boolean disallowIntercept) {}
-        });
-    }
-
-    /** 切换到下一个分类标签（带动画） */
-    private void switchToNextCategory() {
-        int currentIndex = getCurrentCategoryIndex();
-        int nextIndex = (currentIndex + 1) % categoryList.length;
-        animateCategoryChange(categoryList[nextIndex], true);
-    }
-
-    /** 切换到上一个分类标签（带动画） */
-    private void switchToPreviousCategory() {
-        int currentIndex = getCurrentCategoryIndex();
-        int prevIndex = (currentIndex - 1 + categoryList.length) % categoryList.length;
-        animateCategoryChange(categoryList[prevIndex], false);
-    }
-
-    /**
-     * 执行带滑动动画的分类切换。
-     * @param newCategory 目标分类名称
-     * @param forward true 表示切换到下一个分类（列表从右侧滑入），false 表示切换到上一个（从左侧滑入）
-     */
-    private void animateCategoryChange(String newCategory, boolean forward) {
-        int offset = (int) (getResources().getDisplayMetrics().density * (forward ? 80 : -80));
-        recycler.setTranslationX(offset);
-        recycler.setAlpha(0.7f);
-        applyCategory(newCategory);
-        recycler.animate()
-                .translationX(0)
-                .alpha(1.0f)
-                .setDuration(250)
-                .setInterpolator(new android.view.animation.DecelerateInterpolator())
-                .start();
-    }
-
     /** 获取当前分类在列表中的索引，未选中返回 -1 */
     private int getCurrentCategoryIndex() {
         if (currentCategory == null) return -1;
@@ -1093,7 +1104,7 @@ public class MainActivity extends AppCompatActivity {
         return -1;
     }
 
-    /** 应用指定分类（更新 chip 选中状态并过滤） */
+    /** 应用指定分类（更新 chip 选中状态、同步 ViewPager2 位置并过滤） */
     private void applyCategory(String category) {
         currentCategory = category;
         // 更新主标签栏选中状态
@@ -1102,7 +1113,62 @@ public class MainActivity extends AppCompatActivity {
             View chip = ((LinearLayout) chipContainer).getChildAt(i);
             chip.setSelected(category.equals(((TextView) chip).getText().toString()));
         }
+        // 同步 ViewPager2 位置
+        int pageIndex = category == null ? 0 : getCurrentCategoryIndex() + 1;
+        if (viewPager.getCurrentItem() != pageIndex) {
+            viewPager.setCurrentItem(pageIndex, true);
+        }
         doFilter();
+    }
+
+    /** �?ViewPager2 页面位置同步分类标签（不触发 ViewPager2 跳转�?*/
+    private void syncCategoryToPage(String category) {
+        currentCategory = category;
+        View chipContainer = findViewById(R.id.category_bar);
+        for (int i = 0; i < ((LinearLayout) chipContainer).getChildCount(); i++) {
+            View chip = ((LinearLayout) chipContainer).getChildAt(i);
+            chip.setSelected(category != null && category.equals(((TextView) chip).getText().toString()));
+        }
+        doFilter();
+    }
+
+    /**
+     * ViewPager2 适配器：使用 FragmentStateAdapter，每个 page 是一个 Fragment。
+     *
+     * 为什么必须用 Fragment 而不是直接放 RecyclerView？
+     *  ViewPager2 内部就是一个 RecyclerView，如果 page 也是 RecyclerView，
+     *  内部的 RV 会拦截所有横向滑动事件，导致 ViewPager2 无法切页。
+     *  用 Fragment 包裹 RV 后，RV 的横向滑动会正确"上抛"给 ViewPager2。
+     *
+     * 连续滑动过渡（Canvas 效果）：
+     *  - offscreenPageLimit = 2 保证左右两页已渲染
+     *  - CanvasPageTransformer 只做 translationX，不做 alpha/scale
+     *  - ViewPager2 内置的 Fling 速度检测 + 距离判断自动决定松手后吸附到哪一页
+     */
+    private class CategoryPagerAdapter extends FragmentStateAdapter {
+
+        CategoryPagerAdapter(FragmentActivity fa) {
+            super(fa);
+        }
+
+        @NonNull
+        @Override
+        public Fragment createFragment(int position) {
+            CategoryPageFragment f = CategoryPageFragment.newInstance(position);
+            f.setCallbacks(MainActivity.this);
+            f.setAdapter(pageAdapters.get(position));
+            // 应用当前设置
+            f.setColumnCount(getColumnCount());
+            f.setShowRecentDot(getSharedPreferences("settings", MODE_PRIVATE)
+                    .getBoolean("recent_app_dot", true));
+            f.applyListAnimation(listAnimationValue);
+            return f;
+        }
+
+        @Override
+        public int getItemCount() {
+            return categoryList.length + 1;
+        }
     }
 
     /**
@@ -1112,52 +1178,57 @@ public class MainActivity extends AppCompatActivity {
      * 上滑可恢复正常位置。
      */
     private void setupPullDownHover() {
-        // 读取设置
         boolean enabled = getSharedPreferences("settings", MODE_PRIVATE)
                 .getBoolean("pull_down_hover", true);
         if (!enabled) return;
 
-        recycler.addOnItemTouchListener(new RecyclerView.OnItemTouchListener() {
-            private float startY = 0;
-            private boolean isTracking = false;
+        ViewPager2 vp = viewPager;
+        if (vp.getChildAt(0) instanceof RecyclerView) {
+            RecyclerView internalRv = (RecyclerView) vp.getChildAt(0);
+            internalRv.addOnItemTouchListener(new RecyclerView.OnItemTouchListener() {
+                private float startY = 0;
+                private boolean isTracking = false;
 
-            @Override
-            public boolean onInterceptTouchEvent(RecyclerView rv, MotionEvent e) {
-                switch (e.getActionMasked()) {
-                    case MotionEvent.ACTION_DOWN:
-                        startY = e.getY();
-                        isTracking = true;
-                        break;
-                    case MotionEvent.ACTION_MOVE:
-                        if (isTracking) {
-                            float dy = e.getY() - startY;
-                            if (dy > 100 && !rv.canScrollVertically(-1)) {
-                                // 下拉悬停
-                                isTracking = false;
-                                activateHover();
-                                return true;
-                            } else if (dy < -100 && pullDownHoverActive) {
-                                // 上滑取消悬停
-                                isTracking = false;
-                                cancelHover();
-                                return true;
+                @Override
+                public boolean onInterceptTouchEvent(RecyclerView rv, MotionEvent e) {
+                    if (isAnimatingHover) return false;
+                    switch (e.getActionMasked()) {
+                        case MotionEvent.ACTION_DOWN:
+                            startY = e.getY();
+                            isTracking = true;
+                            break;
+                        case MotionEvent.ACTION_MOVE:
+                            if (isTracking) {
+                                float dy = e.getY() - startY;
+                                if (pullDownHoverActive) {
+                                    // 悬停状态下：上滑任意距离即归位
+                                    if (dy < -20) {
+                                        isTracking = false;
+                                        cancelHover();
+                                        return true;
+                                    }
+                                } else if (dy > 100 && !rv.canScrollVertically(-1)) {
+                                    isTracking = false;
+                                    activateHover();
+                                    return true;
+                                }
                             }
-                        }
-                        break;
+                            break;
+                        case MotionEvent.ACTION_UP:
+                        case MotionEvent.ACTION_CANCEL:
+                            isTracking = false;
+                            break;
+                    }
+                    return false;
                 }
-                return false;
-            }
 
-            @Override
-            public void onTouchEvent(RecyclerView rv, MotionEvent e) {
-                if (e.getActionMasked() == MotionEvent.ACTION_UP) {
-                    isTracking = false;
-                }
-            }
+                @Override
+                public void onTouchEvent(RecyclerView rv, MotionEvent e) {}
 
-            @Override
-            public void onRequestDisallowInterceptTouchEvent(boolean disallowIntercept) {}
-        });
+                @Override
+                public void onRequestDisallowInterceptTouchEvent(boolean disallowIntercept) {}
+            });
+        }
     }
 
     /** 激活悬停 */
@@ -1182,7 +1253,7 @@ public class MainActivity extends AppCompatActivity {
         animator.setInterpolator(new android.view.animation.DecelerateInterpolator());
         animator.addUpdateListener(animation -> {
             float value = (float) animation.getAnimatedValue();
-            recycler.setTranslationY(value);
+            viewPager.setTranslationY(value);
         });
         animator.addListener(new android.animation.AnimatorListenerAdapter() {
             @Override
@@ -1328,19 +1399,29 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    /** 用户主动切后台（Home 键、最近任务、手势回桌面）：同步触发，比 onStop 更早更可靠（小米兼容） */
     @Override
-    protected void onPause() {
-        super.onPause();
-        // 切出应用时清空 T9 输入，切回后恢复空白状态
-        if (query.length() > 0) {
-            query.setLength(0);
-            onQueryChanged();
-        }
+    protected void onUserLeaveHint() {
+        super.onUserLeaveHint();
+        pendingQueryClear = true;
+    }
+
+    @Override
+    protected void onSaveInstanceState(@NonNull Bundle outState) {
+        super.onSaveInstanceState(outState);
+        outState.putBoolean("pending_query_clear", pendingQueryClear);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        if (pendingQueryClear) {
+            pendingQueryClear = false;
+            if (query.length() > 0) {
+                query.setLength(0);
+                onQueryChanged();
+            }
+        }
         // 角标由 Adapter 根据 position 自动显示，无需手动刷新
         // 检查是否从设置页触发了强制刷新
         boolean forceRefresh = getSharedPreferences("settings", MODE_PRIVATE)
@@ -1408,6 +1489,18 @@ public class MainActivity extends AppCompatActivity {
                 });
             });
         }
+    }
+
+    // ========== CategoryPageFragment.Callbacks 实现 ==========
+
+    @Override
+    public void onAppClicked(AppEntry entry) {
+        launchApp(entry);
+    }
+
+    @Override
+    public boolean onAppLongClicked(AppEntry entry, View anchor) {
+        return showAppMenu(entry, anchor);
     }
 
     @Override
