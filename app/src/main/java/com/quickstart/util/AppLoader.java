@@ -2,9 +2,11 @@ package com.quickstart.util;
 
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.drawable.Drawable;
+import android.net.Uri;
 
 import com.quickstart.model.AppEntry;
 
@@ -64,6 +66,9 @@ public final class AppLoader {
 
         // 添加微信快捷功能（扫一扫、付款码）
         addWeChatShortcuts(ctx, out);
+
+        // 添加支付宝快捷功能（扫一扫、付款码）
+        addAlipayShortcuts(ctx, out);
 
         return out;
     }
@@ -142,5 +147,58 @@ public final class AppLoader {
             } catch (Throwable ignored2) {
             }
         }
+    }
+
+    /**
+     * 添加支付宝快捷功能：扫一扫、付款码
+     * 支付宝官方支持 URL Scheme，可直接跳转到指定页面
+     */
+    private static void addAlipayShortcuts(Context ctx, List<AppEntry> out) {
+        SharedPreferences prefs = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE);
+        if (!prefs.getBoolean("alipay_shortcuts", true)) {
+            return; // 用户已关闭支付宝快捷方式
+        }
+
+        String alipayPkg = "com.eg.android.AlipayGphone";
+        PackageManager pm = ctx.getPackageManager();
+        try {
+            // 检查支付宝是否安装
+            pm.getPackageInfo(alipayPkg, 0);
+        } catch (Throwable e) {
+            return; // 支付宝未安装，跳过
+        }
+
+        // 支付宝图标
+        Drawable alipayIcon = IconCache.get(ctx, alipayPkg);
+        if (alipayIcon == null) {
+            try {
+                alipayIcon = pm.getApplicationIcon(alipayPkg);
+                IconCache.put(ctx, alipayPkg, alipayIcon);
+            } catch (Throwable ignored) {}
+        }
+
+        // 支付宝扫一扫（URL Scheme: alipayqr://platformapi/startapp?saId=10000007）
+        AppEntry scanEntry = new AppEntry("支付宝扫一扫", alipayPkg, "",
+                T9Matcher.buildFingerprints("支付宝扫一扫"));
+        scanEntry.icon = alipayIcon;
+        scanEntry.recentlyUpdated = false;
+        Intent scanIntent = new Intent(Intent.ACTION_VIEW,
+                Uri.parse("alipayqr://platformapi/startapp?saId=10000007"));
+        scanIntent.setPackage(alipayPkg);
+        scanIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        scanEntry.launchIntent = scanIntent;
+        out.add(scanEntry);
+
+        // 支付宝付款码（URL Scheme: alipayqr://platformapi/startapp?saId=20000056）
+        AppEntry payEntry = new AppEntry("支付宝付款码", alipayPkg, "",
+                T9Matcher.buildFingerprints("支付宝付款码"));
+        payEntry.icon = alipayIcon;
+        payEntry.recentlyUpdated = false;
+        Intent payIntent = new Intent(Intent.ACTION_VIEW,
+                Uri.parse("alipayqr://platformapi/startapp?saId=20000056"));
+        payIntent.setPackage(alipayPkg);
+        payIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        payEntry.launchIntent = payIntent;
+        out.add(payEntry);
     }
 }

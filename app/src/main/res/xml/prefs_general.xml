@@ -36,4 +36,10 @@
         android:entries="@array/recent_time_entries"
         android:entryValues="@array/recent_time_values" />
 
+    <SwitchPreferenceCompat
+        android:key="alipay_shortcuts"
+        android:title="支付宝快捷方式"
+        android:summary="在应用列表中添加支付宝扫一扫和付款码快捷方式"
+        android:defaultValue="true" />
+
 </PreferenceScreen>
