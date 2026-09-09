@@ -914,7 +914,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
             sortAllApps(snapshot);
             main.post(() -> {
                 allApps = snapshot;
-                doFilter();
+                if (query.length() > 0) onQueryChanged(); else doFilter();
             });
         });
     }
@@ -1357,7 +1357,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                             MainActivity a = activityRef.get();
                             if (a == null || a.isDestroyed()) return;
                             a.allApps = cached;
-                            a.doFilter();
+                            if (a.query.length() > 0) a.onQueryChanged(); else a.doFilter();
                             View overlay = loadingOverlayRef.get();
                             if (overlay != null) overlay.setVisibility(View.GONE);
                         });
@@ -1393,7 +1393,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                             MainActivity a = activityRef.get();
                             if (a == null || a.isDestroyed()) return;
                             a.allApps = cached;
-                            a.doFilter();
+                            if (a.query.length() > 0) a.onQueryChanged(); else a.doFilter();
                         });
                     }
                 }
@@ -1427,7 +1427,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                             MainActivity act = activityRef.get();
                             if (act == null || act.isDestroyed()) return;
                             act.allApps = finalLoaded;
-                            act.doFilter();
+                            if (act.query.length() > 0) act.onQueryChanged(); else act.doFilter();
                             View overlay = loadingOverlayRef.get();
                             if (overlay != null) overlay.setVisibility(View.GONE);
                             if (onComplete != null) onComplete.run();
@@ -1548,7 +1548,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                             MainActivity act = activityRef.get();
                             if (act == null || act.isDestroyed()) return;
                             act.allApps = finalLoaded;
-                            act.doFilter();
+                            if (act.query.length() > 0) act.onQueryChanged(); else act.doFilter();
                             View overlay = loadingOverlayRef.get();
                             if (overlay != null) overlay.setVisibility(View.GONE);
                         });
