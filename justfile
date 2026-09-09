@@ -1,3 +1,11 @@
+# 构建 release APK（不安装）
+build-release:
+    ./gradlew assembleRelease
+
+# 安装已构建的 release APK 到连接的设备（不重新构建）
+install-release:
+    adb install -r app/build/outputs/apk/release/app-release.apk
+
 # 构建 debug APK（不安装）
 build:
     ./gradlew assembleDebug
