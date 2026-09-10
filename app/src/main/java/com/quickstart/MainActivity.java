@@ -51,7 +51,10 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public class MainActivity extends AppCompatActivity implements CategoryPageFragment.Callbacks {
+public class MainActivity extends AppCompatActivity implements CategoryPageFragment.PageHost {
+
+    /** 日志 tag：只在异常/兜底路径上打，不刷日志 */
+    private static final String TAG = "KSQ";
 
     private TextView sortLabel, t9Hint, t9Display, emptyHint;
     private ViewPager2 viewPager;
@@ -82,6 +85,8 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
     private boolean isAnimatingHover = false;
     /** 悬停位移动画引用（复位时需要取消） */
     private android.animation.ValueAnimator hoverAnimator;
+    /** 已应用的图标透明度百分比；-1 表示尚未应用（用于变化检测，避免 onResume 无谓刷新列表） */
+    private int lastIconTransparency = -1;
 
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -89,6 +94,18 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
     private final WeakReference<Handler> mainHandlerRef = new WeakReference<>(main);
     /** Activity 的弱引用，供定时刷新任务使用 */
     private final WeakReference<MainActivity> activityRef = new WeakReference<>(this);
+
+    /**
+     * 进程级前后台观察者。必须持有引用并在 onDestroy 反注册：
+     * 否则每次 Activity 重建都会往 ProcessLifecycleOwner 上再挂一个匿名观察者，既泄漏，
+     * 又会让 pendingQueryClear 写到已销毁的旧实例上（重建后"切后台清空输入"会失效）。
+     */
+    private final DefaultLifecycleObserver processObserver = new DefaultLifecycleObserver() {
+        @Override
+        public void onStop(@NonNull LifecycleOwner owner) {
+            pendingQueryClear = true;
+        }
+    };
 
     /** 启动后定时刷新的间隔：30 分钟 */
     private static final long REFRESH_INTERVAL_MS = 30 * 60 * 1000L;
@@ -190,6 +207,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
 
         // 依赖 adapter，必须在其初始化之后调用
         applyFontColor();
+        applyIconTransparency();
 
         sortLabel.setOnClickListener(v -> showSortMenu());
 
@@ -210,12 +228,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         });
 
         // 监听 APP 前后台切换：进入后台时标记需要清空输入
-        ProcessLifecycleOwner.get().getLifecycle().addObserver(new DefaultLifecycleObserver() {
-            @Override
-            public void onStop(@NonNull LifecycleOwner owner) {
-                pendingQueryClear = true;
-            }
-        });
+        ProcessLifecycleOwner.get().getLifecycle().addObserver(processObserver);
 
         setupKeypad();
         setupPullDownHover();
@@ -595,6 +608,10 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
             String category = page == 0 ? null : categoryAt(page - 1);
             filterPage(pageAdapters.get(page), q, category, hidden);
         }
+
+        // 第二道保险：把共享 adapter 补齐给还没有绑定的分类页 Fragment
+        // （Activity 重建时 Fragment 由系统还原，createFragment 不会再被调用）
+        syncLiveFragments();
     }
 
     private void filterPage(AppListAdapter pageAdapter, String q, String category, java.util.Set<String> hidden) {
@@ -1191,6 +1208,22 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         }
     }
 
+    /**
+     * 应用图标透明度设置。
+     * SP 里存的是「透明度百分比」0-100：0 = 完全不透明（alpha 1.0），100 = 完全透明，默认 60。
+     */
+    private void applyIconTransparency() {
+        int v = getSharedPreferences("settings", MODE_PRIVATE)
+                .getInt("icon_transparency", 60);
+        v = Math.max(0, Math.min(100, v));
+        if (v == lastIconTransparency) return; // 值未变，跳过，避免每次 onResume 都刷新列表
+        lastIconTransparency = v;
+        float alpha = (100 - v) / 100f;
+        adapter.setIconAlpha(alpha);
+        for (AppListAdapter a : pageAdapters) a.setIconAlpha(alpha);
+        updateAllFragments(f -> f.setIconAlpha(alpha));
+    }
+
     // ==================== 分类 Tab 相关 ====================
 
     /** 刷新分类 Tab 列表：主界面/可编辑分类（来自 CategoryConfig）+ 固定的智能分类 */
@@ -1350,6 +1383,8 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
             pageAdapters.add(a);
         }
         applyFontColor();
+        lastIconTransparency = -1; // 新 adapter 实例，复位检测值以强制重新应用
+        applyIconTransparency();
 
         // 重建 ViewPager 分页与 chips
         viewPager.setAdapter(new CategoryPagerAdapter(this));
@@ -1366,6 +1401,24 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
             viewPager.setCurrentItem(a, false); // 无动画锚定，避免循环滑动下长距离滚动
         }
         syncPage(p);
+        syncLiveFragments(); // pageAdapters 已重建，把新实例补发给活着的 Fragment
+    }
+
+    /**
+     * 把共享 adapter 补齐给所有活着的分类页 Fragment（幂等，已绑定则零成本）。
+     *
+     * 修复的场景：Activity 被销毁重建后，ViewPager2 的 FragmentStateAdapter 在恢复状态时
+     * 直接复用系统还原出来的 Fragment 实例，不会再调 createFragment()，
+     * 于是注入点被跳过、Fragment.adapter 保持 null、RecyclerView 没有 adapter → 列表整片空白。
+     */
+    private void syncLiveFragments() {
+        for (androidx.fragment.app.Fragment f : getSupportFragmentManager().getFragments()) {
+            if (!(f instanceof CategoryPageFragment) || !f.isAdded()) continue;
+            CategoryPageFragment pf = (CategoryPageFragment) f;
+            int idx = pf.getPageIndex();
+            if (idx < 0 || idx >= pageAdapters.size()) continue;
+            pf.bind(pageAdapters.get(idx), this);
+        }
     }
 
     /**
@@ -1624,6 +1677,19 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                 if (activity.isDestroyed()) return;
                 final List<AppEntry> loaded = AppLoader.loadLaunchableApps(activity);
 
+                // 扫描结果为空属异常：保留缓存/现有列表，别把界面清空
+                if (isScanResultSuspicious(loaded)) {
+                    Handler mh = mainHandlerRef.get();
+                    if (mh != null) {
+                        mh.post(() -> {
+                            View overlay = loadingOverlayRef.get();
+                            if (overlay != null) overlay.setVisibility(View.GONE);
+                            if (onComplete != null) onComplete.run(); // 定时刷新仍要挂上
+                        });
+                    }
+                    return;
+                }
+
                 // 3. 预加载图标 + 排序数据 + 排序
                 final List<String> packages = new java.util.ArrayList<>();
                 for (AppEntry e : loaded) packages.add(e.packageName);
@@ -1660,16 +1726,19 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         }
     }
 
-    /** 定时刷新：直接全量扫描（不读缓存），完成后写缓存并刷新 UI */
+    /** 定时刷新：直接全量扫描（不读缓存），完成后刷新 UI */
     private void refreshAppsFullScan() {
         final WeakReference<Handler> handlerRef = mainHandlerRef;
         io.execute(() -> {
-            MainActivity activity = null;
-            // 通过 Handler 的 looper 获取主线程上下文检查 Activity 状态较复杂，
-            // 这里直接执行扫描，post 到主线程时检查 loadingOverlay 是否还可用
-            final List<AppEntry> loaded = AppLoader.loadLaunchableApps(activityRef.get());
-            activity = activityRef.get();
+            // 必须先取到存活的 Activity 再扫描：直接把可能为 null 的 Context 传进去
+            // 会在 io 线程里抛 NPE 并被静默吞掉，导致 30 分钟定时刷新从此再也不生效
+            MainActivity activity = activityRef.get();
             if (activity == null || activity.isDestroyed()) return;
+
+            final List<AppEntry> loaded = AppLoader.loadLaunchableApps(activity);
+            if (activity.isDestroyed()) return;
+            if (isScanResultSuspicious(loaded)) return;
+
             java.util.Set<String> hidden = activity.getHiddenPackages();
             loaded.removeIf(e -> hidden.contains(e.packageName));
             Handler h = handlerRef.get();
@@ -1678,10 +1747,21 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                     MainActivity a = activityRef.get();
                     if (a == null || a.isDestroyed()) return;
                     a.allApps = loaded;
-                    a.doFilter();
+                    if (a.query.length() > 0) a.onQueryChanged(); else a.doFilter();
                 });
             }
         });
+    }
+
+    /**
+     * 全量扫描结果为空视为异常：真机上不可能一个可启动应用都查不到，
+     * 出现空结果多半是系统限流/查询失败。此时绝不能用空列表覆盖现有列表，
+     * 否则界面会整片空白（这正是"有时候列表显示为空"的一个诱因）。
+     */
+    private static boolean isScanResultSuspicious(List<AppEntry> loaded) {
+        if (!loaded.isEmpty()) return false;
+        android.util.Log.w(TAG, "全量扫描结果为空，保留现有列表（可能是系统限流或查询失败）");
+        return true;
     }
 
     /** 用户主动切后台（Home 键、最近任务、手势回桌面）：同步触发，比 onStop 更早更可靠（小米兼容） */
@@ -1702,6 +1782,10 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         super.onResume();
         // 设置里可能新增/删除/改名了分类，回来后检测并重建
         rebuildTabsIfChanged();
+        // 兜底：重建后 Fragment 可能刚被系统还原、缺 adapter 注入（bind 幂等）
+        syncLiveFragments();
+        // 从设置页返回即时生效（值未变时内部会直接跳过）
+        applyIconTransparency();
         if (pendingQueryClear) {
             pendingQueryClear = false;
             if (query.length() > 0) {
@@ -1750,6 +1834,19 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                 if (activity == null || activity.isDestroyed()) return;
 
                 final List<AppEntry> loaded = AppLoader.loadLaunchableApps(activity);
+
+                // 扫描结果为空属异常：保留缓存/现有列表，别把界面清空
+                if (isScanResultSuspicious(loaded)) {
+                    Handler mh = mainHandlerRef.get();
+                    if (mh != null) {
+                        mh.post(() -> {
+                            View overlay = loadingOverlayRef.get();
+                            if (overlay != null) overlay.setVisibility(View.GONE);
+                        });
+                    }
+                    return;
+                }
+
                 List<String> packages = new ArrayList<>();
                 for (AppEntry e : loaded) packages.add(e.packageName);
                 final List<AppEntry> finalLoaded = loaded;
@@ -1782,6 +1879,41 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         }
     }
 
+    // ========== CategoryPageFragment.PageHost 实现 ==========
+
+    /**
+     * 宿主按页注入共享 adapter、设置与当前页数据。
+     *
+     * 由 CategoryPageFragment.onViewCreated 调用，是"Activity 重建后 Fragment 拿不到 adapter"
+     * 的主修复点。正常路径下 createFragment() 已注入过，bind() 会直接返回，无额外开销。
+     */
+    @Override
+    public void bindPageFragment(CategoryPageFragment f) {
+        final int idx = f.getPageIndex();
+        if (idx < 0 || idx >= pageAdapters.size()) {
+            android.util.Log.w(TAG, "bindPageFragment: 页下标越界 idx=" + idx
+                    + " pageAdapters=" + pageAdapters.size());
+            return;
+        }
+        final AppListAdapter pageAdapter = pageAdapters.get(idx);
+        f.bind(pageAdapter, this);
+        f.setColumnCount(getColumnCount());
+        f.setShowRecentDot(getSharedPreferences("settings", MODE_PRIVATE)
+                .getBoolean("recent_app_dot", true));
+        f.applyListAnimation(listAnimationValue);
+
+        // 补推一次当前页数据：Fragment 视图创建时共享 adapter 可能还没被 doFilter 填过。
+        // 放到下一帧执行，避免在 RecyclerView 布局期触发 adapter 通知
+        // （"Cannot call this method while RecyclerView is computing a layout"）。
+        main.post(() -> {
+            if (isDestroyed()) return;
+            int i = f.getPageIndex();
+            if (i < 0 || i >= pageAdapters.size() || pageAdapters.get(i) != pageAdapter) return;
+            filterPage(pageAdapter, query.toString(),
+                    i == 0 ? null : categoryAt(i - 1), getHiddenPackages());
+        });
+    }
+
     // ========== CategoryPageFragment.Callbacks 实现 ==========
 
     @Override
@@ -1798,6 +1930,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
     protected void onDestroy() {
         super.onDestroy();
         main.removeCallbacks(periodicRefresh);
+        ProcessLifecycleOwner.get().getLifecycle().removeObserver(processObserver);
         io.shutdownNow();
     }
 }
