@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
@@ -14,7 +15,7 @@
         android:background="?attr/colorPrimary"
         android:paddingHorizontal="12dp"
         android:paddingTop="10dp"
-        android:paddingBottom="8dp"
+        android:paddingBottom="6dp"
         android:elevation="4dp">
 
         <LinearLayout
@@ -47,55 +48,21 @@
                 android:clickable="true"
                 android:focusable="true" />
         </LinearLayout>
-
-        <TextView
-            android:id="@+id/t9_hint"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:textColor="#CCFFFFFF"
-            android:textSize="13sp"
-            android:singleLine="true"
-            android:ellipsize="end"
-            android:visibility="gone" />
-
-        <TextView
-            android:id="@+id/t9_display"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:text=""
-            android:textColor="@android:color/white"
-            android:textSize="22sp"
-            android:textStyle="bold"
-            android:singleLine="true"
-            android:minHeight="28dp" />
-
-        <HorizontalScrollView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:scrollbars="none">
-
-            <LinearLayout
-                android:id="@+id/category_bar"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal">
-
-                <TextView style="@style/CategoryChip" android:text="最近搜索" />
-                <TextView style="@style/CategoryChip" android:text="最近使用" />
-                <TextView style="@style/CategoryChip" android:text="最近安装" />
-                <TextView style="@style/CategoryChip" android:text="社交" />
-                <TextView style="@style/CategoryChip" android:text="影音" />
-                <TextView style="@style/CategoryChip" android:text="交通出行" />
-                <TextView style="@style/CategoryChip" android:text="实用工具" />
-                <TextView style="@style/CategoryChip" android:text="游戏" />
-                <TextView style="@style/CategoryChip" android:text="购物" />
-                <TextView style="@style/CategoryChip" android:text="理财" />
-            </LinearLayout>
-        </HorizontalScrollView>
     </LinearLayout>
+
+    <!-- ================= 分类 chips（多行自动换行，始终可见） ================= -->
+    <com.google.android.flexbox.FlexboxLayout
+        android:id="@+id/category_chips"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="?attr/colorPrimary"
+        android:paddingHorizontal="12dp"
+        android:paddingBottom="4dp"
+        app:flexWrap="wrap"
+        app:justifyContent="flex_start"
+        app:alignItems="flex_start"
+        app:flexDirection="row"
+        app:alignContent="stretch" />
 
     <!-- ================= 中间应用列表区 ================= -->
     <FrameLayout
@@ -115,10 +82,56 @@
             android:adjustViewBounds="false"
             android:importantForAccessibility="no" />
 
-        <androidx.viewpager2.widget.ViewPager2
-            android:id="@+id/app_list"
+        <!-- 列表 + T9 显示条：整体叠在背景层上，让显示条的半透明灰真正融进背景 -->
+        <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="match_parent" />
+            android:layout_height="match_parent"
+            android:orientation="vertical">
+
+            <androidx.viewpager2.widget.ViewPager2
+                android:id="@+id/app_list"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1" />
+
+            <!-- 底部区域：显示 T9 输入；键盘收起时上滑可展开键盘；透明灰叠在背景上 -->
+            <LinearLayout
+                android:id="@+id/bottom_swipe_area"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="56dp"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:paddingHorizontal="16dp"
+                android:paddingTop="6dp"
+                android:paddingBottom="8dp"
+                android:background="#1A808080"
+                android:clickable="false"
+                android:focusable="false">
+
+                <TextView
+                    android:id="@+id/t9_hint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/hint_text"
+                    android:textSize="11sp"
+                    android:singleLine="true"
+                    android:ellipsize="end"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/t9_display"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text=""
+                    android:textColor="?android:attr/textColorPrimary"
+                    android:textSize="20sp"
+                    android:textStyle="bold"
+                    android:singleLine="true"
+                    android:minHeight="26dp"
+                    android:gravity="center" />
+            </LinearLayout>
+        </LinearLayout>
 
         <!-- 启动加载提示 -->
         <LinearLayout

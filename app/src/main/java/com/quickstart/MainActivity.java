@@ -21,6 +21,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.fragment.app.Fragment;
 import androidx.fragment.app.FragmentActivity;
@@ -36,6 +37,7 @@ import com.quickstart.adapter.AppListAdapter;
 import com.quickstart.model.AppEntry;
 import com.quickstart.util.AppLoader;
 import com.quickstart.util.BackgroundManager;
+import com.quickstart.util.CategoryConfig;
 import com.quickstart.util.FastCache;
 import com.quickstart.util.IconCache;
 import com.quickstart.util.KeyBindingHelper;
@@ -65,11 +67,13 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
     /** 当前「最近搜索」分类的历史键集合（包名/Activity），非该分类时为 null */
     private java.util.Set<String> searchHistoryKeys;
 
-    /** 分类标签有序列表（用于左右滑动切换） */
-    private final String[] categoryList = {
-            "最近搜索", "最近使用", "最近安装", "社交", "影音",
-            "交通出行", "实用工具", "游戏", "购物", "理财"
-    };
+    /** 分类 Tab 有序列表（不含「全部应用」；含 主界面/可编辑分类 + 固定智能分类） */
+    private List<String> categoryTabs = new ArrayList<>();
+    /** 已构建的分类签名，用于检测设置里分类是否变化，从而决定是否重建 Tab */
+    private String categoryTabsSignature = "";
+    /** 是否开启分类循环滑动（整型最大值分页的下标基准倍数） */
+    private boolean loopSwipe = false;
+    private static final int LOOP_BASE_MULT = 200;
     /** 下拉悬停功能的滚动偏移量（让顶部应用移到下半屏） */
     private static final int PULL_DOWN_HOVER_OFFSET = 600;
     /** 下拉悬停是否触发 */
@@ -128,13 +132,19 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         adapter.setColumnCount(columnCount);
 
         // 初始化每页的 Adapter（与 Fragment 一一对应）
-        for (int i = 0; i <= categoryList.length; i++) {
+        refreshCategoryTabs();
+        for (int i = 0; i < getPageCount(); i++) {
             AppListAdapter pageAdapter = new AppListAdapter();
             pageAdapter.setOnAppClickListener(this::launchApp);
             pageAdapter.setOnAppLongClickListener(this::showAppMenu);
             pageAdapter.setColumnCount(columnCount);
             pageAdapters.add(pageAdapter);
         }
+
+        // 锚定初始位置：若开启了循环滑动，则从基准页出发，保证左右都能无限滑动
+        loopSwipe = getSharedPreferences("settings", MODE_PRIVATE)
+                .getBoolean("categories_loop", true);
+        categoryTabsSignature = String.join("|", categoryTabs) + "|loop=" + loopSwipe;
 
         // ViewPager2 使用 FragmentStateAdapter：每个 page 是一个 Fragment（内部放 RecyclerView）
         // 这是 ViewPager2 连续滑动过渡的必要条件：如果 page 直接是 RecyclerView，
@@ -143,12 +153,31 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         viewPager.setOffscreenPageLimit(2); // 预加载左右两页，保证连续滑动时相邻页已渲染
         viewPager.registerOnPageChangeCallback(new ViewPager2.OnPageChangeCallback() {
             @Override
+            public void onPageScrolled(int position, float positionOffset, int positionOffsetPixels) {}
+            @Override
             public void onPageSelected(int position) {
-                // 页切换同步分类标签
-                String category = position == 0 ? null : categoryList[position - 1];
-                syncCategoryToPage(category);
+                // 页切换：归一化位置后同步分类
+                syncPage(nrm(position));
             }
         });
+
+        // 顶部分类 chips（多行自动换行）
+        buildCategoryChips();
+
+        // 应用「默认打开分类」设置；否则停在「全部应用」（无动画锚定，避免循环滑动下长距离滚动）
+        String defaultCat = getSharedPreferences("settings", MODE_PRIVATE)
+                .getString("default_category", null);
+        int startIdx = 0;
+        if (defaultCat != null && !defaultCat.isEmpty()
+                && getCategoryPageIndex(defaultCat) != 0 && categoryTabs.contains(defaultCat)) {
+            startIdx = getCategoryPageIndex(defaultCat);
+        }
+        int n = getPageCount();
+        int anchor = loopSwipe ? LOOP_BASE_MULT * n + startIdx : startIdx;
+        if (viewPager.getCurrentItem() != anchor) {
+            viewPager.setCurrentItem(anchor, false); // 无动画
+        }
+        syncPage(startIdx);
 
         // 应用列表动画设置
         applyListAnimationSetting();
@@ -189,7 +218,6 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         });
 
         setupKeypad();
-        setupCategoryChips();
         setupPullDownHover();
         loadAppsAsync();
     }
@@ -221,6 +249,40 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
 
         // 加载数字键绑定图标
         loadKeyBindingIcons();
+
+        // 底部区域上滑展开键盘
+        setupBottomSwipeToExpand();
+    }
+
+    /** 底部区域上滑手势：键盘收起时，上滑可展开键盘 */
+    private void setupBottomSwipeToExpand() {
+        View bottomArea = findViewById(R.id.bottom_swipe_area);
+        if (bottomArea == null) return;
+
+        final float[] startY = {0};
+        final int SWIPE_THRESHOLD = 80; // 上滑超过80px触发
+
+        bottomArea.setOnTouchListener((v, event) -> {
+            // 只在键盘收起时响应
+            if (keypad.getVisibility() != View.VISIBLE) {
+                switch (event.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        startY[0] = event.getY();
+                        return true;
+                    case MotionEvent.ACTION_MOVE:
+                        float dy = startY[0] - event.getY();
+                        if (dy > SWIPE_THRESHOLD) {
+                            // 上滑展开键盘
+                            keypad.setVisibility(View.VISIBLE);
+                            TextView toggleBtn = findViewById(R.id.btn_toggle_keypad);
+                            if (toggleBtn != null) toggleBtn.setText("⌄");
+                            return true;
+                        }
+                        break;
+                }
+            }
+            return false;
+        });
     }
 
     /**
@@ -287,12 +349,12 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         updateAllFragments(f -> f.applyListAnimation(value));
     }
 
-    /** 遍历所有已创建的 Fragment（用于应用设置变更） */
+    /** 遍历所有已创建的 Fragment（用于应用设置变更；按页面下标而非 tag，兼容循环滑动） */
     private void updateAllFragments(java.util.function.Consumer<CategoryPageFragment> action) {
-        for (int i = 0; i <= categoryList.length; i++) {
-            CategoryPageFragment f = (CategoryPageFragment) getSupportFragmentManager()
-                    .findFragmentByTag("f" + i);
-            if (f != null) action.accept(f);
+        for (androidx.fragment.app.Fragment f : getSupportFragmentManager().getFragments()) {
+            if (f instanceof CategoryPageFragment && f.isAdded()) {
+                action.accept((CategoryPageFragment) f);
+            }
         }
     }
 
@@ -429,6 +491,17 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
     private void onDigitPressed(int digit) {
         query.append(digit);
         onQueryChanged();
+        // T9输入时，让所有分类页的列表跳到顶部
+        scrollAllPagesToTop();
+    }
+
+    /** 所有分类页列表瞬间滚回顶部 */
+    private void scrollAllPagesToTop() {
+        for (androidx.fragment.app.Fragment f : getSupportFragmentManager().getFragments()) {
+            if (f instanceof CategoryPageFragment && f.isAdded()) {
+                ((CategoryPageFragment) f).scrollToTop();
+            }
+        }
     }
 
     private void onBackspace() {
@@ -519,7 +592,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
 
         // 更新所有页 Adapter（T9 搜索时所有页都显示全局结果，无搜索时按分类过滤）
         for (int page = 0; page < pageAdapters.size(); page++) {
-            String category = page == 0 ? null : categoryList[page - 1];
+            String category = page == 0 ? null : categoryAt(page - 1);
             filterPage(pageAdapters.get(page), q, category, hidden);
         }
     }
@@ -635,66 +708,106 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         return keys;
     }
 
-    /** 搜索权重排序：综合使用频率、最近使用时间、是否精确匹配 */
+    /** 默认排序权重优先级（从前到后，优先级递减） */
+    private static final String[] DEFAULT_WEIGHT_ORDER = {
+            "weight_exact", "weight_prefix", "weight_contains", "weight_freq", "weight_recent"
+    };
+
+    /** 搜索权重排序：按「T9 排序权重」列表顺序做词序比较，排在前面的规则优先，盖过后面所有规则 */
     private void sortBySearchWeight(List<AppEntry> list, String query) {
         long now = System.currentTimeMillis();
         final long ONE_DAY = 24 * 60 * 60 * 1000L;
         final String lowerQuery = query.toLowerCase();
+        SharedPreferences prefs = getSharedPreferences("settings", MODE_PRIVATE);
+        final List<String> order = readWeightOrder(prefs);
 
-        // 先为每个应用计算一次分数，比较器只查表，避免排序过程中 O(n log n) 次重复计算
-        final java.util.Map<AppEntry, Integer> scores =
+        // 先为每个应用计算一次得分向量，比较器只查表，避免排序过程中 O(n log n) 次重复计算
+        final java.util.Map<AppEntry, int[]> scores =
                 new java.util.IdentityHashMap<>(list.size() * 2);
         for (AppEntry e : list) {
-            scores.put(e, calcSearchScore(e, lowerQuery, now, ONE_DAY));
+            scores.put(e, calcSearchScoreVector(e, lowerQuery, now, ONE_DAY, prefs, order));
         }
         java.util.Collections.sort(list, (a, b) ->
-                Integer.compare(scores.get(b), scores.get(a))); // 降序
+                compareScoreVector(scores.get(b), scores.get(a))); // 降序
     }
 
-    /** 计算搜索权重分数（lowerQuery 为已转小写的搜索词） */
-    private int calcSearchScore(AppEntry e, String lowerQuery, long now, long oneDay) {
-        int score = 0;
-
-        // 1. 使用频率权重（最高 100 分）
-        int launchCount = launchCountCache.getOrDefault(e.packageName, 0);
-        score += Math.min(launchCount, 50) * 2; // 最多 100 分
-
-        // 2. 最近使用时间权重（最高 80 分）
-        long lastLaunch = lastLaunchTimeCache.getOrDefault(e.packageName, 0L);
-        if (lastLaunch > 0) {
-            long daysAgo = (now - lastLaunch) / oneDay;
-            if (daysAgo == 0) score += 80;      // 今天使用过
-            else if (daysAgo <= 1) score += 60; // 昨天
-            else if (daysAgo <= 3) score += 40; // 3 天内
-            else if (daysAgo <= 7) score += 20; // 一周内
+    /** 按规则优先级顺序计算得分向量（下标越小优先级越高；末位固定追加「最近更新」加分兜底） */
+    private int[] calcSearchScoreVector(AppEntry e, String lowerQuery, long now, long oneDay,
+                                        SharedPreferences prefs, List<String> order) {
+        // 匹配强度：3=完全 2=开头 1=包含 0=不匹配（基于应用名/拼音/首字母/数字指纹判定）
+        int strength = T9Matcher.matchStrength(lowerQuery, e);
+        int n = order.size();
+        int[] v = new int[n + 1];
+        for (int i = 0; i < n; i++) {
+            v[i] = ruleScore(e, order.get(i), strength, now, oneDay, prefs);
         }
+        v[n] = e.recentlyUpdated ? 10 : 0;
+        return v;
+    }
 
-        // 3. 精确匹配加分（最高 50 分）
-        String lowerLabel = e.label.toLowerCase();
-        if (lowerLabel.startsWith(lowerQuery)) score += 50; // 开头匹配
-        else if (lowerLabel.contains(lowerQuery)) score += 30; // 包含匹配
+    /** 计算单条规则的得分（0 表示该规则不命中 / 被设置为 0 忽略） */
+    private int ruleScore(AppEntry e, String key, int strength, long now, long oneDay,
+                          SharedPreferences prefs) {
+        switch (key) {
+            case "weight_exact":
+                return strength == 3 ? weightInt(prefs, key, 150) : 0;   // 如 77→QQ、wx→微信
+            case "weight_prefix":
+                return strength == 2 ? weightInt(prefs, key, 50) : 0;    // weixi→微信（全拼前缀）
+            case "weight_contains":
+                return strength == 1 ? weightInt(prefs, key, 30) : 0;    // 仅包含/跳跃匹配
+            case "weight_freq":                              // 使用频率（次数上限 50）
+                return Math.min(launchCountCache.getOrDefault(e.packageName, 0), 50)
+                        * Math.max(0, weightInt(prefs, key, 2));
+            case "weight_recent": {                          // 最近使用时间
+                int mult = weightInt(prefs, key, 1);
+                if (mult <= 0) return 0;
+                long lastLaunch = lastLaunchTimeCache.getOrDefault(e.packageName, 0L);
+                if (lastLaunch <= 0) return 0;
+                long daysAgo = (now - lastLaunch) / oneDay;
+                int base = daysAgo == 0 ? 80 : daysAgo <= 1 ? 60 : daysAgo <= 3 ? 40 : 20;
+                return base * mult;
+            }
+            default:
+                return 0;
+        }
+    }
 
-        // 4. 最近更新加分
-        if (e.recentlyUpdated) score += 10;
+    /** 词序比较两个得分向量：第一个得分不同的规则即决定先后（靠前规则盖过靠后规则） */
+    private int compareScoreVector(int[] a, int[] b) {
+        for (int i = 0; i < a.length; i++) {
+            if (a[i] != b[i]) return Integer.compare(a[i], b[i]);
+        }
+        return 0;
+    }
 
-        return score;
+    /** 读取规则优先级列表（优先取设置里保存的顺序，缺失项按默认顺序补到末尾） */
+    private List<String> readWeightOrder(SharedPreferences prefs) {
+        List<String> list = new ArrayList<>();
+        String s = prefs.getString("weight_order", null);
+        if (s != null) {
+            for (String key : s.split(",")) {
+                key = key.trim();
+                if (!key.isEmpty() && !list.contains(key)) list.add(key);
+            }
+        }
+        for (String key : DEFAULT_WEIGHT_ORDER) {
+            if (!list.contains(key)) list.add(key);
+        }
+        return list;
+    }
+
+    /** 读取权重设置，非法/越界值回退到默认 */
+    private static int weightInt(SharedPreferences prefs, String key, int def) {
+        try {
+            return Integer.parseInt(prefs.getString(key, String.valueOf(def)));
+        } catch (Throwable ignored) {
+            return def;
+        }
     }
 
     private boolean matchCategory(AppEntry e, String cat) {
-        String pkg = e.packageName.toLowerCase();
-        String label = e.label.toLowerCase();
+        if (cat == null) return true;
         switch (cat) {
-            case "社交": return containsAny(pkg, "com.tencent.mm", "com.sina.weibo")
-                    || containsAny(label, "微信", "微博", "qq", "钉钉", "飞书");
-            case "影音": return containsAny(pkg, "com.ss.android.ugc.aweme", "com.netease.cloudmusic")
-                    || containsAny(label, "抖音", "音乐", "视频", "哔哩");
-            case "交通出行": return containsAny(pkg, "com.sdu.didi.psnger", "com.autonavi.minimap")
-                    || containsAny(label, "地图", "滴滴", "导航");
-            case "实用工具": return containsAny(label, "计算器", "设置", "日历", "时钟");
-            case "游戏": return pkg.contains("game") || containsAny(label, "游戏", "斗地主");
-            case "购物": return containsAny(pkg, "com.taobao", "com.jingdong", "com.xunmeng")
-                    || containsAny(label, "淘宝", "京东", "拼多多");
-            case "理财": return containsAny(label, "银行", "支付宝", "股票");
             case "最近搜索": {
                 if (searchHistoryKeys == null) searchHistoryKeys = loadHistoryKeys();
                 return searchHistoryKeys.contains(e.packageName + "/" + e.activityName);
@@ -704,13 +817,12 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                 long t = installTimeCache.getOrDefault(e.packageName, 0L);
                 return t > 0 && System.currentTimeMillis() - t <= getRecentTimeRange();
             }
-            default: return true;
+            default: {
+                // 可编辑分类：手动类型查归属列表，关键词类型按关键词/包名规则
+                if (CategoryConfig.isInManualCategory(this, cat, e)) return true;
+                return CategoryConfig.matchesKeyword(this, cat, e);
+            }
         }
-    }
-
-    private boolean containsAny(String s, String... keywords) {
-        for (String k : keywords) if (s.contains(k)) return true;
-        return false;
     }
 
     private void launchApp(AppEntry entry) {
@@ -1029,7 +1141,11 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
             if (keypadView != null && keypadView.getVisibility() == View.VISIBLE) {
                 keypadH = keypadView.getHeight();
             }
-            int maxH = listH + keypadH;   // 键盘收起后列表能占到的最大高度
+            // T9 显示条也在背景区内，需一并计入列表区最大高度
+            View stripView = findViewById(R.id.bottom_swipe_area);
+            int stripH = (stripView != null && stripView.getVisibility() == View.VISIBLE)
+                    ? stripView.getHeight() : 0;
+            int maxH = listH + stripH + keypadH;   // 键盘收起后列表能占到的最大高度
 
             SharedPreferences sp = getSharedPreferences(BackgroundManager.PREFS, MODE_PRIVATE);
             float ratio = w / (float) maxH;
@@ -1075,77 +1191,181 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         }
     }
 
-    private void setupCategoryChips() {
-        View chipContainer = findViewById(R.id.category_bar);
-        for (int i = 0; i < ((LinearLayout) chipContainer).getChildCount(); i++) {
-            View chip = ((LinearLayout) chipContainer).getChildAt(i);
-            chip.setOnClickListener(v -> {
-                boolean wasSelected = v.isSelected();
-                for (int j = 0; j < ((LinearLayout) chipContainer).getChildCount(); j++) {
-                    ((LinearLayout) chipContainer).getChildAt(j).setSelected(false);
-                }
-                if (wasSelected) {
-                    currentCategory = null;
-                } else {
-                    v.setSelected(true);
-                    currentCategory = ((TextView) v).getText().toString();
-                }
-                doFilter();
-            });
-            // 长按「最近搜索」chip：清空搜索历史
-            if (chip instanceof TextView && "最近搜索".equals(((TextView) chip).getText().toString())) {
-                chip.setOnLongClickListener(v -> {
-                    new androidx.appcompat.app.AlertDialog.Builder(MainActivity.this)
-                            .setTitle("清空搜索历史")
-                            .setMessage("确定清空全部搜索历史吗？")
-                            .setPositiveButton("清空", (d, w) -> {
-                                SearchHistory.clear(MainActivity.this);
-                                if ("最近搜索".equals(currentCategory)) doFilter();
-                                Toast.makeText(MainActivity.this, "搜索历史已清空", Toast.LENGTH_SHORT).show();
-                            })
-                            .setNegativeButton("取消", null)
-                            .show();
-                    return true;
-                });
+    // ==================== 分类 Tab 相关 ====================
+
+    /** 刷新分类 Tab 列表：主界面/可编辑分类（来自 CategoryConfig）+ 固定的智能分类 */
+    private void refreshCategoryTabs() {
+        categoryTabs = new ArrayList<>(CategoryConfig.getUserCategoryNames(this));
+        categoryTabs.add(CategoryConfig.CAT_RECENT_SEARCH);
+        categoryTabs.add(CategoryConfig.CAT_RECENT_USE);
+        categoryTabs.add(CategoryConfig.CAT_RECENT_INSTALL);
+    }
+
+    /** 页总数：第 0 页为「全部应用」，其余每分类一页 */
+    private int getPageCount() {
+        return categoryTabs.size() + 1;
+    }
+
+    /** 第 index 个分类（0 起），越界返回 null */
+    @Nullable
+    private String categoryAt(int index) {
+        if (index < 0 || index >= categoryTabs.size()) return null;
+        return categoryTabs.get(index);
+    }
+
+    /** 分类名对应的页面下标（第 0 页是「全部应用」），未命中返回 0 */
+    private int getCategoryPageIndex(String name) {
+        if (name == null) return 0;
+        for (int i = 0; i < categoryTabs.size(); i++) {
+            if (categoryTabs.get(i).equals(name)) return i + 1;
+        }
+        return 0;
+    }
+
+    /** 归一化 ViewPager2 原始位置到页面下标（0..getPageCount()-1） */
+    private int nrm(int raw) {
+        int n = getPageCount();
+        if (n <= 0) return 0;
+        return ((raw % n) + n) % n;
+    }
+
+    /** 切换到指定页面下标（含循环滑动处理） */
+    private void goToPage(int pageIndex) {
+        int p = nrm(pageIndex);
+        int n = getPageCount();
+        int cur = viewPager.getCurrentItem();
+        int target;
+        if (loopSwipe) {
+            // 取距离当前位置最近的方向，避免长距离往返跳动
+            int curPage = nrm(cur);
+            int delta = p - curPage;
+            if (delta > n / 2) delta -= n;
+            else if (delta < -n / 2) delta += n;
+            target = cur + delta;
+        } else {
+            target = p;
+        }
+        if (cur != target) {
+            viewPager.setCurrentItem(target, true);
+        }
+    }
+
+    /** 按页面下标同步分类状态（不触发跳转）：更新选中 chips + 过滤 */
+    private void syncPage(int pageIndex) {
+        currentCategory = pageIndex == 0 ? null : categoryAt(pageIndex - 1);
+        updateChipSelection();
+        doFilter();
+    }
+
+    /** 应用指定分类（同步 ViewPager2 位置、chips 选中态并过滤） */
+    private void applyCategory(String category) {
+        int pageIndex = category == null ? 0 : getCategoryPageIndex(category);
+        currentCategory = pageIndex == 0 ? null : category;
+        updateChipSelection();
+        doFilter();
+        goToPage(pageIndex);
+    }
+
+    /** 构建顶部分类 chips（全部应用 + 各分类），多行自动换行 */
+    private void buildCategoryChips() {
+        com.google.android.flexbox.FlexboxLayout chips = findViewById(R.id.category_chips);
+        if (chips == null) return;
+        chips.removeAllViews();
+        addChip(chips, "全部应用");
+        for (String name : categoryTabs) addChip(chips, name);
+        updateChipSelection();
+    }
+
+    private void addChip(com.google.android.flexbox.FlexboxLayout chips, String text) {
+        TextView chip = new TextView(this);
+        chip.setText(text);
+        // setTextAppearance 只应用文字样式，背景/内边距/边距需手动设置，
+        // 否则 chips 会变成两行紧挨着的裸文字
+        chip.setTextAppearance(this, R.style.CategoryChipDrawer);
+        chip.setBackgroundResource(R.drawable.bg_category_chip);
+        chip.setGravity(android.view.Gravity.CENTER);
+        chip.setClickable(true);
+        chip.setFocusable(true);
+        chip.setOnClickListener(v -> applyCategory("全部应用".equals(text) ? null : text));
+        chip.setOnLongClickListener(v -> {
+            if ("最近搜索".equals(text)) {
+                new androidx.appcompat.app.AlertDialog.Builder(MainActivity.this)
+                        .setTitle("清空搜索历史")
+                        .setMessage("确定清空全部搜索历史吗？")
+                        .setPositiveButton("清空", (d, w) -> {
+                            SearchHistory.clear(MainActivity.this);
+                            if ("最近搜索".equals(currentCategory)) doFilter();
+                        })
+                        .setNegativeButton("取消", null)
+                        .show();
+                return true;
+            }
+            return false;
+        });
+
+        // 显式设置尺寸与边距：行内间距 8dp、行间间距 8dp，让各分类彼此空开
+        float density = getResources().getDisplayMetrics().density;
+        com.google.android.flexbox.FlexboxLayout.LayoutParams lp =
+                new com.google.android.flexbox.FlexboxLayout.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.WRAP_CONTENT, (int) (32 * density));
+        lp.setMargins(0, 0, (int) (8 * density), (int) (8 * density));
+        chips.addView(chip, lp);
+    }
+
+    /** 高亮当前分类 chips：全部应用 ↔ 具体分类 */
+    private void updateChipSelection() {
+        com.google.android.flexbox.FlexboxLayout chips = findViewById(R.id.category_chips);
+        if (chips == null) return;
+        for (int i = 0; i < chips.getChildCount(); i++) {
+            View v = chips.getChildAt(i);
+            if (v instanceof TextView) {
+                String text = ((TextView) v).getText().toString();
+                boolean selected = "全部应用".equals(text)
+                        ? currentCategory == null
+                        : text.equals(currentCategory);
+                v.setSelected(selected);
             }
         }
     }
 
-    /** 获取当前分类在列表中的索引，未选中返回 -1 */
-    private int getCurrentCategoryIndex() {
-        if (currentCategory == null) return -1;
-        for (int i = 0; i < categoryList.length; i++) {
-            if (categoryList[i].equals(currentCategory)) return i;
-        }
-        return -1;
-    }
+    /** 从设置返回后检测分类/循环设置是否变化，有变则重建页适配器与 chips */
+    private void rebuildTabsIfChanged() {
+        refreshCategoryTabs();
+        loopSwipe = getSharedPreferences("settings", MODE_PRIVATE)
+                .getBoolean("categories_loop", true);
+        String sig = String.join("|", categoryTabs) + "|loop=" + loopSwipe;
+        if (sig.equals(categoryTabsSignature)) return;
+        categoryTabsSignature = sig;
 
-    /** 应用指定分类（更新 chip 选中状态、同步 ViewPager2 位置并过滤） */
-    private void applyCategory(String category) {
-        currentCategory = category;
-        // 更新主标签栏选中状态
-        View chipContainer = findViewById(R.id.category_bar);
-        for (int i = 0; i < ((LinearLayout) chipContainer).getChildCount(); i++) {
-            View chip = ((LinearLayout) chipContainer).getChildAt(i);
-            chip.setSelected(category.equals(((TextView) chip).getText().toString()));
+        // 重建每页 Adapter
+        pageAdapters.clear();
+        int columnCount = getColumnCount();
+        for (int i = 0; i < getPageCount(); i++) {
+            AppListAdapter a = new AppListAdapter();
+            a.setOnAppClickListener(this::launchApp);
+            a.setOnAppLongClickListener(this::showAppMenu);
+            a.setColumnCount(columnCount);
+            a.setShowRecentDot(getSharedPreferences("settings", MODE_PRIVATE)
+                    .getBoolean("recent_app_dot", true));
+            pageAdapters.add(a);
         }
-        // 同步 ViewPager2 位置
-        int pageIndex = category == null ? 0 : getCurrentCategoryIndex() + 1;
-        if (viewPager.getCurrentItem() != pageIndex) {
-            viewPager.setCurrentItem(pageIndex, true);
-        }
-        doFilter();
-    }
+        applyFontColor();
 
-    /** �?ViewPager2 页面位置同步分类标签（不触发 ViewPager2 跳转�?*/
-    private void syncCategoryToPage(String category) {
-        currentCategory = category;
-        View chipContainer = findViewById(R.id.category_bar);
-        for (int i = 0; i < ((LinearLayout) chipContainer).getChildCount(); i++) {
-            View chip = ((LinearLayout) chipContainer).getChildAt(i);
-            chip.setSelected(category != null && category.equals(((TextView) chip).getText().toString()));
+        // 重建 ViewPager 分页与 chips
+        viewPager.setAdapter(new CategoryPagerAdapter(this));
+        buildCategoryChips();
+
+        // 若当前分类已被删除则回到「全部应用」
+        if (currentCategory != null && getCategoryPageIndex(currentCategory) == 0) {
+            currentCategory = null;
         }
-        doFilter();
+        int p = currentCategory == null ? 0 : getCategoryPageIndex(currentCategory);
+        int n2 = getPageCount();
+        int a = loopSwipe ? LOOP_BASE_MULT * n2 + p : p;
+        if (viewPager.getCurrentItem() != a) {
+            viewPager.setCurrentItem(a, false); // 无动画锚定，避免循环滑动下长距离滚动
+        }
+        syncPage(p);
     }
 
     /**
@@ -1170,9 +1390,10 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         @NonNull
         @Override
         public Fragment createFragment(int position) {
-            CategoryPageFragment f = CategoryPageFragment.newInstance(position);
+            int p = nrm(position);
+            CategoryPageFragment f = CategoryPageFragment.newInstance(p);
             f.setCallbacks(MainActivity.this);
-            f.setAdapter(pageAdapters.get(position));
+            f.setAdapter(pageAdapters.get(p));
             // 应用当前设置
             f.setColumnCount(getColumnCount());
             f.setShowRecentDot(getSharedPreferences("settings", MODE_PRIVATE)
@@ -1183,7 +1404,8 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
 
         @Override
         public int getItemCount() {
-            return categoryList.length + 1;
+            // 开启循环滑动时返回整型最大值，配合创建位置的取模，实现无限循环
+            return loopSwipe ? Integer.MAX_VALUE : getPageCount();
         }
     }
 
@@ -1478,6 +1700,8 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
     @Override
     protected void onResume() {
         super.onResume();
+        // 设置里可能新增/删除/改名了分类，回来后检测并重建
+        rebuildTabsIfChanged();
         if (pendingQueryClear) {
             pendingQueryClear = false;
             if (query.length() > 0) {

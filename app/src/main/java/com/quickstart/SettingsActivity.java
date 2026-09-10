@@ -35,10 +35,11 @@ import java.util.concurrent.Executors;
  */
 public class SettingsActivity extends AppCompatActivity {
 
-    private static final String[] TAB_TITLES = {"显示", "通用", "键盘", "数据"};
+    private static final String[] TAB_TITLES = {"显示", "通用", "搜索", "键盘", "数据"};
     private static final int[] TAB_XML_RES = {
             R.xml.prefs_display,
             R.xml.prefs_general,
+            R.xml.prefs_search,
             R.xml.prefs_keyboard,
             R.xml.prefs_data
     };
@@ -62,7 +63,7 @@ public class SettingsActivity extends AppCompatActivity {
         viewPager = findViewById(R.id.settings_viewpager);
         SettingsPagerAdapter pagerAdapter = new SettingsPagerAdapter(this);
         viewPager.setAdapter(pagerAdapter);
-        viewPager.setOffscreenPageLimit(3); // 保持相邻 fragment 存活，搜索时可访问
+        viewPager.setOffscreenPageLimit(4); // 保持相邻 fragment 存活，搜索时可访问
 
         // TabLayout
         tabLayout = findViewById(R.id.settings_tabs);
@@ -273,6 +274,15 @@ public class SettingsActivity extends AppCompatActivity {
                 });
             }
 
+            // 排序权重：拖拽列表调整规则优先级
+            Preference weightOrder = findPreference("weight_order_manage");
+            if (weightOrder != null) {
+                weightOrder.setOnPreferenceClickListener(pref -> {
+                    startActivity(new Intent(requireContext(), WeightOrderActivity.class));
+                    return true;
+                });
+            }
+
             // 数字键绑定应用
             Preference keyBinding = findPreference("key_binding");
             if (keyBinding != null) {
@@ -287,6 +297,15 @@ public class SettingsActivity extends AppCompatActivity {
             if (hiddenApps != null) {
                 hiddenApps.setOnPreferenceClickListener(pref -> {
                     startActivity(new Intent(requireContext(), HiddenAppsActivity.class));
+                    return true;
+                });
+            }
+
+            // 分类管理
+            Preference categoryManage = findPreference("category_manage");
+            if (categoryManage != null) {
+                categoryManage.setOnPreferenceClickListener(pref -> {
+                    startActivity(new Intent(requireContext(), CategorySettingsActivity.class));
                     return true;
                 });
             }
