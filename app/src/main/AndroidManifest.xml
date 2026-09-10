@@ -52,6 +52,20 @@
             android:label="已隐藏的应用"
             android:theme="@style/AppTheme" />
 
+        <!-- 分类管理 -->
+        <activity
+            android:name=".CategorySettingsActivity"
+            android:exported="false"
+            android:label="分类管理"
+            android:theme="@style/AppTheme" />
+
+        <!-- 排序权重（拖拽调整优先级） -->
+        <activity
+            android:name=".WeightOrderActivity"
+            android:exported="false"
+            android:label="T9 排序权重"
+            android:theme="@style/AppTheme" />
+
         <!-- 数字键绑定管理 -->
         <activity
             android:name=".KeyBindingActivity"

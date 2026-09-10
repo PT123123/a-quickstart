@@ -142,6 +142,61 @@ public final class T9Matcher {
     }
 
     /**
+     * 匹配强度分级（供 T9 排序权重使用）：
+     * 3=完全匹配（整个输入 = 应用名 / 规范化串 / 首字母 / 全拼 / 数字指纹，如 77→QQ、wx→微信、weixin→微信）
+     * 2=开头匹配（输入是应用某个可搜索表示的前缀）
+     * 1=包含 / 跳跃匹配（能匹配到，但既非完全也非开头）
+     * 0=不匹配
+     */
+    public static int matchStrength(String query, AppEntry entry) {
+        if (query == null || query.isEmpty()) return 3;
+        if (entry == null || entry.label == null || entry.label.isEmpty()) return 0;
+        String lowerQuery = query.toLowerCase();
+        List<String> pat = entry.enhancedPatterns;
+        if (pat == null) pat = buildEnhancedPatterns(entry.label);
+
+        String lowerLabel   = entry.label.toLowerCase();
+        String normalized     = pat.get(PAT_NORMALIZED);
+        String wordInitials   = pat.get(PAT_WORD_INITIALS);
+        String mixedInitials  = pat.get(PAT_MIXED_INITIALS);
+        String fullPinyin     = pat.get(PAT_FULL_PINYIN);
+        String pinyinInitials = pat.get(PAT_PINYIN_INITIALS);
+
+        // 完全匹配：整个输入等于应用的某个可搜索表示
+        if (lowerLabel.equals(lowerQuery)
+                || normalized.equals(lowerQuery)
+                || wordInitials.equals(lowerQuery)
+                || mixedInitials.equals(lowerQuery)
+                || fullPinyin.equals(lowerQuery)
+                || pinyinInitials.equals(lowerQuery)) {
+            return 3;
+        }
+        if (entry.fingerprints != null) {
+            for (String fp : entry.fingerprints) {
+                if (fp.equals(lowerQuery)) return 3;
+            }
+        }
+
+        // 开头匹配：输入是某个可搜索表示的前缀
+        if (lowerLabel.startsWith(lowerQuery)
+                || normalized.startsWith(lowerQuery)
+                || wordInitials.startsWith(lowerQuery)
+                || mixedInitials.startsWith(lowerQuery)
+                || fullPinyin.startsWith(lowerQuery)
+                || pinyinInitials.startsWith(lowerQuery)) {
+            return 2;
+        }
+        if (entry.fingerprints != null) {
+            for (String fp : entry.fingerprints) {
+                if (fp.startsWith(lowerQuery)) return 2;
+            }
+        }
+
+        // 能匹配但非完全/开头 → 包含 / 跳跃匹配
+        return matchesEnhanced(query, entry) ? 1 : 0;
+    }
+
+    /**
      * 兼容旧 API：判断数字串是否匹配指纹列表
      */
     public static boolean matches(String query, List<String> fingerprints) {

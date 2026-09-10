@@ -42,4 +42,8 @@
         android:summary="在应用列表中添加支付宝扫一扫和付款码快捷方式"
         android:defaultValue="true" />
 
+    <Preference
+        android:key="category_manage"
+        android:title="分类管理"
+        android:summary="添加、删除、编辑分类；「最近搜索/最近使用/最近安装」为固定智能分类" />
 </PreferenceScreen>

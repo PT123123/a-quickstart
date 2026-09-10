@@ -35,6 +35,9 @@ dependencies {
     implementation 'androidx.core:core:1.13.1'
     implementation 'com.google.android.material:material:1.12.0'
 
+    // FlexboxLayout: 自动换行布局
+    implementation 'com.google.android.flexbox:flexbox:3.0.0'
+
     // TinyPinyin: lightweight Chinese-to-pinyin library
     implementation 'com.github.promeg:tinypinyin:2.0.3'
 

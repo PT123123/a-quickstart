@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <PreferenceCategory
+        android:title="T9 排序权重"
+        android:summary="长按拖动调整规则优先级，越靠前越优先（如「完全匹配」放最前，则完全匹配盖过其他规则）">
+
+        <Preference
+            android:key="weight_order_manage"
+            android:title="排序权重规则"
+            android:summary="拖动调整规则优先级，点击修改数值" />
+    </PreferenceCategory>
+
+</PreferenceScreen>
