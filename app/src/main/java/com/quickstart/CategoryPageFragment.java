@@ -39,6 +39,20 @@ public class CategoryPageFragment extends Fragment {
         boolean onAppLongClicked(AppEntry entry, View anchor);
     }
 
+    /**
+     * 宿主接口：Activity 侧按页注入共享 adapter + 当前页数据。
+     *
+     * 为什么需要它：Activity 被销毁重建（切后台久驻被系统回收、旋转、分屏等）时，
+     * ViewPager2 的 FragmentStateAdapter 在 restoreState() 里直接复用系统还原出来的
+     * Fragment 实例，之后 ensureFragment() 因 mFragments 已有该 itemId 而**不会**再调
+     * createFragment()。注入只写在 createFragment() 里的话，还原出来的 Fragment
+     * 就永远拿不到 adapter，RecyclerView 没有 adapter → 列表区整片空白。
+     * 因此 Fragment 必须在视图创建时主动向宿主索取（幂等）。
+     */
+    public interface PageHost extends Callbacks {
+        void bindPageFragment(CategoryPageFragment f);
+    }
+
     private RecyclerView recycler;
     private AppListAdapter adapter;
     private int columnCount = 3;
@@ -63,10 +77,44 @@ public class CategoryPageFragment extends Fragment {
     /** 注入共享的 AppListAdapter 实例，使每页的内容可以由外部统一控制。 */
     public void setAdapter(AppListAdapter sharedAdapter) {
         this.adapter = sharedAdapter;
+        if (sharedAdapter != null) {
+            wireCallbacks();
+        }
         if (recycler != null) {
             recycler.setAdapter(sharedAdapter);
             applyColumnCount();
         }
+    }
+
+    /**
+     * 幂等绑定共享 adapter + 宿主回调。
+     *
+     * 正常路径（createFragment 新建）下宿主已注入过，这里会直接返回；
+     * 只有 Fragment 被系统还原、注入被跳过时才会真正挂上 adapter。
+     */
+    public void bind(AppListAdapter sharedAdapter, Callbacks callbacks) {
+        if (sharedAdapter == null) return;
+        if (callbacks != null) {
+            this.callbacksRef = new WeakReference<>(callbacks);
+        }
+        if (this.adapter == sharedAdapter && recycler != null
+                && recycler.getAdapter() == sharedAdapter) {
+            return;
+        }
+        setAdapter(sharedAdapter);
+    }
+
+    /** 把本 Fragment 的点击/长按转发挂到共享 adapter 上（回调在触发时实时取，避免持有失效引用） */
+    private void wireCallbacks() {
+        if (adapter == null) return;
+        adapter.setOnAppClickListener(entry -> {
+            Callbacks cb = callbacksRef != null ? callbacksRef.get() : null;
+            if (cb != null) cb.onAppClicked(entry);
+        });
+        adapter.setOnAppLongClickListener((entry, anchor) -> {
+            Callbacks cb = callbacksRef != null ? callbacksRef.get() : null;
+            return cb != null && cb.onAppLongClicked(entry, anchor);
+        });
     }
 
     /** 推送当前分类筛选后的应用列表（null 表示清空） */
@@ -90,6 +138,11 @@ public class CategoryPageFragment extends Fragment {
     /** 设置字体颜色 */
     public void setFontColor(int color) {
         if (adapter != null) adapter.setFontColor(color);
+    }
+
+    /** 设置图标透明度对应的 alpha（1f 不透明，0f 全透明） */
+    public void setIconAlpha(float alpha) {
+        if (adapter != null) adapter.setIconAlpha(alpha);
     }
 
     /** 设置最近应用红点显示 */
@@ -142,16 +195,22 @@ public class CategoryPageFragment extends Fragment {
         applyAnimatorToRecycler(pendingAnimatorValue);
         if (adapter != null) {
             recycler.setAdapter(adapter);
-            adapter.setOnAppClickListener(entry -> {
-                Callbacks cb = callbacksRef != null ? callbacksRef.get() : null;
-                if (cb != null) cb.onAppClicked(entry);
-            });
-            adapter.setOnAppLongClickListener((entry, anchor) -> {
-                Callbacks cb = callbacksRef != null ? callbacksRef.get() : null;
-                return cb != null && cb.onAppLongClicked(entry, anchor);
-            });
+            wireCallbacks();
         }
         return root;
+    }
+
+    @Override
+    public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
+        super.onViewCreated(view, savedInstanceState);
+        if (getActivity() instanceof Callbacks) {
+            callbacksRef = new WeakReference<>((Callbacks) getActivity());
+        }
+        // Activity 重建时 Fragment 由系统还原，createFragment() 不会再被调用，
+        // 这里主动向宿主索取一次注入（幂等），否则 RecyclerView 永远没有 adapter
+        if (getActivity() instanceof PageHost) {
+            ((PageHost) getActivity()).bindPageFragment(this);
+        }
     }
 
     private void applyColumnCount() {

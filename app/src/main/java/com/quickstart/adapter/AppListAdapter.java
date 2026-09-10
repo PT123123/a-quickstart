@@ -54,6 +54,8 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
     private int fontColor = 0;
     private boolean showRecentDot = true;
     private int columnCount = 3;
+    /** 图标透明度对应的 View alpha（1f 完全不透明，0f 完全不可见） */
+    private float iconAlpha = 1f;
     /** 角标手势模式，每次 submit 时重新读取一次，避免每个 item 重绑都查 SharedPreferences */
     private String badgeGestureMode;
 
@@ -63,6 +65,11 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
 
     public void setHighlightQuery(String q) { this.highlightQuery = q == null ? "" : q; }
     public void setFontColor(int color) { this.fontColor = color; notifyDataSetChanged(); }
+    /** 设置图标 alpha（View 属性，不影响 Drawable 缓存与文字/角标/红点） */
+    public void setIconAlpha(float alpha) {
+        this.iconAlpha = alpha;
+        notifyDataSetChanged();
+    }
     public void setShowRecentDot(boolean show) { this.showRecentDot = show; notifyDataSetChanged(); }
     public void setColumnCount(int count) { this.columnCount = count; notifyDataSetChanged(); }
 
@@ -130,6 +137,9 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
                 });
             });
         }
+
+        // 图标透明度（View alpha 是视图属性，payload "icon" 局部刷新不会重置，无需重复设置）
+        h.icon.setAlpha(iconAlpha);
 
         // 尺寸只在列数变化或首次绑定时应用，避免每次重绑都触发 requestLayout
         if (h.appliedColumnCount != columnCount) {

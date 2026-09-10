@@ -18,6 +18,15 @@
         android:entries="@array/column_count_entries"
         android:entryValues="@array/column_count_values" />
 
+    <SeekBarPreference
+        android:key="icon_transparency"
+        android:title="图标透明度"
+        android:summary="数值越大图标越淡（0 为不透明，100 为全透明），默认 60"
+        android:defaultValue="60"
+        android:max="100"
+        app:min="0"
+        app:showSeekBarValue="true" />
+
     <Preference
         android:key="font_color"
         android:title="字体颜色"
