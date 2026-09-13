@@ -30,6 +30,17 @@
 - 背景颜色 / 字体颜色
 - 最近更新圆点提示
 
+### 快跳过（开屏广告自动跳过）
+设置 →「跳过」Tab，借鉴 [gkd](https://github.com/gkd-kit/gkd)、[Android-Touch-Helper](https://github.com/zfdang/Android-Touch-Helper)、[SKIP](https://github.com/GuoXiCheng/SKIP) 三种思路的本地规则引擎，**总开关可随时关闭**（关闭后即使无障碍服务开启也不动作）：
+
+- **方法一 · 关键字匹配**：点击文本/描述含关键字的按钮，内置「跳过 / Skip / 我知道了」等，支持自定义关键字增删
+- **方法二 · 控件匹配**：「跳过」文字与按钮分离时点击其最近的可点击父控件；同时点击控件 ID 含 `skip` 的按钮
+- **方法三 · 坐标点击兜底**：前两种没命中时模拟点击屏幕指定百分比位置（默认右上角，Android 7.0+）
+- **生效时间窗**：默认仅应用打开后 10 秒内生效，避免误触普通界面的「跳过」按钮；单次应用打开最多点击 4 次，点击后进入冷却
+- **跳过提示**：每次成功跳过时在屏幕下方显示蓝色提示气泡（应用名 + 命中方式，可关闭）。使用无障碍服务专属悬浮窗（`TYPE_ACCESSIBILITY_OVERLAY`），无需悬浮窗权限、不受系统后台限制
+- **永不点击自身与系统界面**：以当前活动窗口所属应用判断，本应用设置页和系统设置、通知栏等系统界面（会显示「快跳过」等服务字样）不会触发
+- 首次使用需在系统设置中开启无障碍服务（设置页内有状态显示与直达入口）
+
 ### 其他
 - **二维码配置传送**：设置 → 导入/导出配置 → 扫码传送/扫码接收。一台手机分帧轮播二维码，另一台相机连续扫码，收齐校验后一键导入，全程无需联网；剪贴板导出/导入与二维码共用同一份全量配置（含界面设置、数字键绑定、隐藏应用）
 - 定时刷新应用列表（30 分钟间隔）
@@ -37,7 +48,7 @@
   - **最近搜索**：按时间倒序列出通过 T9 搜索启动过的应用，长按该 chip 可清空历史
   - **最近使用**：启动过的应用按最近启动时间倒序
   - **最近安装**：在「最近更新范围」设置的时间范围内安装的应用
-- 无障碍服务：自动跳过开屏广告
+- 无障碍服务：快跳过（详见上方「快跳过」一节）
 
 ## 技术栈
 
@@ -55,6 +66,7 @@
 本项目基于以下开源项目/资源参考开发：
 
 - **[TinyPinyin](https://github.com/promeG/TinyPinyin)** — 汉字转拼音库，用于实现中文应用的 T9 搜索匹配
+- **[gkd](https://github.com/gkd-kit/gkd) / [Android-Touch-Helper](https://github.com/zfdang/Android-Touch-Helper) / [SKIP](https://github.com/GuoXiCheng/SKIP)** — 快跳过功能参考：关键字/控件/坐标三种跳过方式、开屏时间窗防误触
 - AndroidX 官方组件（AppCompat、RecyclerView、Preference）
 - Android 原生 T9 输入法逻辑（数字键到字母的映射：2=ABC, 3=DEF, 4=GHI, 5=JKL, 6=MNO, 7=PQRS, 8=TUV, 9=WXYZ）
 
@@ -63,6 +75,19 @@
 ```bash
 ./gradlew assembleDebug
 ```
+
+Windows 下推荐用 [just](https://github.com/casey/just)（基于 PowerShell）：
+
+```bash
+just build              # 构建 debug APK
+just install phone      # 安装到手机
+just install tablet     # 安装到平板
+just devices            # 查看已连接设备
+just build-install tablet  # 构建并安装到平板
+just install-release phone # 安装 release APK 到手机
+```
+
+`install` 支持 `phone` / `tablet`（自动按设备特征和屏幕短边 ≥600dp 识别），也可直接传 adb 序列号；只连接一台设备时直接装到它。
 
 ## 项目结构
 

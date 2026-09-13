@@ -106,4 +106,21 @@
         <item>medium</item>
         <item>heavy</item>
     </string-array>
+
+    <string-array name="ad_skip_time_entries">
+        <item>打开后 3 秒内</item>
+        <item>打开后 5 秒内</item>
+        <item>打开后 8 秒内</item>
+        <item>打开后 10 秒内</item>
+        <item>打开后 15 秒内</item>
+        <item>不限制（整个使用过程）</item>
+    </string-array>
+    <string-array name="ad_skip_time_values">
+        <item>3000</item>
+        <item>5000</item>
+        <item>8000</item>
+        <item>10000</item>
+        <item>15000</item>
+        <item>0</item>
+    </string-array>
 </resources>
