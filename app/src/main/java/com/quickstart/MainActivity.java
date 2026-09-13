@@ -70,7 +70,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
     /** 当前「最近搜索」分类的历史键集合（包名/Activity），非该分类时为 null */
     private java.util.Set<String> searchHistoryKeys;
 
-    /** 分类 Tab 有序列表（不含「全部应用」；含 主界面/可编辑分类 + 固定智能分类） */
+    /** 分类 Tab 有序列表（不含「全部应用」；来自 CategoryConfig，含主界面/可编辑分类/智能分类） */
     private List<String> categoryTabs = new ArrayList<>();
     /** 已构建的分类签名，用于检测设置里分类是否变化，从而决定是否重建 Tab */
     private String categoryTabsSignature = "";
@@ -181,13 +181,16 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         // 顶部分类 chips（多行自动换行）
         buildCategoryChips();
 
-        // 应用「默认打开分类」设置；否则停在「全部应用」（无动画锚定，避免循环滑动下长距离滚动）
+        // 应用「默认打开分类」设置：未设置过(null)默认打开「最近使用」；""=全部应用；其他=分类名。
+        // 无动画锚定，避免循环滑动下长距离滚动
         String defaultCat = getSharedPreferences("settings", MODE_PRIVATE)
                 .getString("default_category", null);
-        int startIdx = 0;
-        if (defaultCat != null && !defaultCat.isEmpty()
-                && getCategoryPageIndex(defaultCat) != 0 && categoryTabs.contains(defaultCat)) {
-            startIdx = getCategoryPageIndex(defaultCat);
+        int startIdx;
+        if (defaultCat == null) {
+            String defName = CategoryConfig.findNameByType(this, CategoryConfig.TYPE_SMART_USE);
+            startIdx = defName == null ? 0 : getCategoryPageIndex(defName);
+        } else {
+            startIdx = defaultCat.isEmpty() ? 0 : getCategoryPageIndex(defaultCat);
         }
         int n = getPageCount();
         int anchor = loopSwipe ? LOOP_BASE_MULT * n + startIdx : startIdx;
@@ -566,18 +569,19 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
     private void doFilter() {
         String q = query.toString();
         java.util.Set<String> hidden = getHiddenPackages();
+        String curSmart = smartTypeOf(currentCategory);
         // 「最近搜索」叠加 T9 输入时需要按 包名/Activity 判断命中，提前构建历史键集合
-        searchHistoryKeys = "最近搜索".equals(currentCategory) ? loadHistoryKeys() : null;
+        searchHistoryKeys = CategoryConfig.TYPE_SMART_SEARCH.equals(curSmart) ? loadHistoryKeys() : null;
         filtered = new ArrayList<>();
         if (q.isEmpty() && currentCategory == null) {
             for (AppEntry e : allApps) {
                 if (!hidden.contains(e.packageName)) filtered.add(e);
             }
-        } else if (q.isEmpty() && "最近搜索".equals(currentCategory)) {
+        } else if (q.isEmpty() && CategoryConfig.TYPE_SMART_SEARCH.equals(curSmart)) {
             filtered = buildRecentSearched(hidden);
-        } else if (q.isEmpty() && "最近使用".equals(currentCategory)) {
+        } else if (q.isEmpty() && CategoryConfig.TYPE_SMART_USE.equals(curSmart)) {
             filtered = buildRecentlyUsed(hidden);
-        } else if (q.isEmpty() && "最近安装".equals(currentCategory)) {
+        } else if (q.isEmpty() && CategoryConfig.TYPE_SMART_INSTALL.equals(curSmart)) {
             filtered = buildRecentlyInstalled(hidden);
         } else {
             for (AppEntry e : allApps) {
@@ -616,17 +620,18 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
 
     private void filterPage(AppListAdapter pageAdapter, String q, String category, java.util.Set<String> hidden) {
         List<AppEntry> pageFiltered = new ArrayList<>();
+        String smart = smartTypeOf(category);
 
         if (q.isEmpty() && category == null) {
             // 无搜索 + 无分类 = 全部应用
             for (AppEntry e : allApps) {
                 if (!hidden.contains(e.packageName)) pageFiltered.add(e);
             }
-        } else if (q.isEmpty() && "最近搜索".equals(category)) {
+        } else if (q.isEmpty() && CategoryConfig.TYPE_SMART_SEARCH.equals(smart)) {
             pageFiltered = buildRecentSearched(hidden);
-        } else if (q.isEmpty() && "最近使用".equals(category)) {
+        } else if (q.isEmpty() && CategoryConfig.TYPE_SMART_USE.equals(smart)) {
             pageFiltered = buildRecentlyUsed(hidden);
-        } else if (q.isEmpty() && "最近安装".equals(category)) {
+        } else if (q.isEmpty() && CategoryConfig.TYPE_SMART_INSTALL.equals(smart)) {
             pageFiltered = buildRecentlyInstalled(hidden);
         } else if (!q.isEmpty()) {
             // T9 搜索：全局搜索，忽略分类限制，使用增强匹配
@@ -650,9 +655,10 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
 
     /** 空态提示文案：按当前筛选模式区分 */
     private String emptyHintText() {
-        if ("最近搜索".equals(currentCategory)) return "暂无搜索记录";
-        if ("最近使用".equals(currentCategory)) return "暂无使用记录";
-        if ("最近安装".equals(currentCategory)) return "最近没有新安装的应用";
+        String smart = smartTypeOf(currentCategory);
+        if (CategoryConfig.TYPE_SMART_SEARCH.equals(smart)) return "暂无搜索记录";
+        if (CategoryConfig.TYPE_SMART_USE.equals(smart)) return "暂无使用记录";
+        if (CategoryConfig.TYPE_SMART_INSTALL.equals(smart)) return "最近没有新安装的应用";
         return "没有匹配的应用";
     }
 
@@ -824,22 +830,28 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
 
     private boolean matchCategory(AppEntry e, String cat) {
         if (cat == null) return true;
-        switch (cat) {
-            case "最近搜索": {
-                if (searchHistoryKeys == null) searchHistoryKeys = loadHistoryKeys();
-                return searchHistoryKeys.contains(e.packageName + "/" + e.activityName);
-            }
-            case "最近使用": return lastLaunchTimeCache.getOrDefault(e.packageName, 0L) > 0;
-            case "最近安装": {
-                long t = installTimeCache.getOrDefault(e.packageName, 0L);
-                return t > 0 && System.currentTimeMillis() - t <= getRecentTimeRange();
-            }
-            default: {
-                // 可编辑分类：手动类型查归属列表，关键词类型按关键词/包名规则
-                if (CategoryConfig.isInManualCategory(this, cat, e)) return true;
-                return CategoryConfig.matchesKeyword(this, cat, e);
-            }
+        String smart = smartTypeOf(cat);
+        if (CategoryConfig.TYPE_SMART_SEARCH.equals(smart)) {
+            if (searchHistoryKeys == null) searchHistoryKeys = loadHistoryKeys();
+            return searchHistoryKeys.contains(e.packageName + "/" + e.activityName);
         }
+        if (CategoryConfig.TYPE_SMART_USE.equals(smart)) {
+            return lastLaunchTimeCache.getOrDefault(e.packageName, 0L) > 0;
+        }
+        if (CategoryConfig.TYPE_SMART_INSTALL.equals(smart)) {
+            long t = installTimeCache.getOrDefault(e.packageName, 0L);
+            return t > 0 && System.currentTimeMillis() - t <= getRecentTimeRange();
+        }
+        // 关键词/手动分类：手动类型查归属列表，关键词类型按关键词/包名规则
+        if (CategoryConfig.isInManualCategory(this, cat, e)) return true;
+        return CategoryConfig.matchesKeyword(this, cat, e);
+    }
+
+    /** 分类名对应的智能类型（TYPE_SMART_*），非智能分类或「全部应用」返回 null */
+    @Nullable
+    private String smartTypeOf(String categoryName) {
+        if (categoryName == null) return null;
+        return CategoryConfig.smartTypeOf(this, categoryName);
     }
 
     private void launchApp(AppEntry entry) {
@@ -1226,12 +1238,9 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
 
     // ==================== 分类 Tab 相关 ====================
 
-    /** 刷新分类 Tab 列表：主界面/可编辑分类（来自 CategoryConfig）+ 固定的智能分类 */
+    /** 刷新分类 Tab 列表：CategoryConfig 里的全部分类（主界面/可编辑分类/智能分类），顺序即配置顺序 */
     private void refreshCategoryTabs() {
-        categoryTabs = new ArrayList<>(CategoryConfig.getUserCategoryNames(this));
-        categoryTabs.add(CategoryConfig.CAT_RECENT_SEARCH);
-        categoryTabs.add(CategoryConfig.CAT_RECENT_USE);
-        categoryTabs.add(CategoryConfig.CAT_RECENT_INSTALL);
+        categoryTabs = new ArrayList<>(CategoryConfig.getAllNames(this));
     }
 
     /** 页总数：第 0 页为「全部应用」，其余每分类一页 */
@@ -1321,13 +1330,16 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         chip.setFocusable(true);
         chip.setOnClickListener(v -> applyCategory("全部应用".equals(text) ? null : text));
         chip.setOnLongClickListener(v -> {
-            if ("最近搜索".equals(text)) {
+            // 智能分类「最近搜索」（可能已被改名）：长按清空搜索历史
+            if (CategoryConfig.TYPE_SMART_SEARCH.equals(CategoryConfig.smartTypeOf(this, text))) {
                 new androidx.appcompat.app.AlertDialog.Builder(MainActivity.this)
                         .setTitle("清空搜索历史")
                         .setMessage("确定清空全部搜索历史吗？")
                         .setPositiveButton("清空", (d, w) -> {
                             SearchHistory.clear(MainActivity.this);
-                            if ("最近搜索".equals(currentCategory)) doFilter();
+                            if (CategoryConfig.TYPE_SMART_SEARCH.equals(smartTypeOf(currentCategory))) {
+                                doFilter();
+                            }
                         })
                         .setNegativeButton("取消", null)
                         .show();
