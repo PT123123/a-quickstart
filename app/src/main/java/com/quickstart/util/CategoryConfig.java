@@ -17,26 +17,31 @@ import java.util.Set;
 /**
  * 分类配置管理。
  *
- * 分类分两类：
- *  - 智能分类（最近搜索 / 最近使用 / 最近安装）：固定、不可编辑，由代码决定归属。
- *  - 用户分类：可在「设置-分类管理」中添加、删除、重命名、编辑。
- *    用户分类又分两种归属方式：
- *       keyword  关键词规则：标签关键词 或 包名关键词，命中即归属（逗号分隔）。
- *       manual   手动分类：显式指定一组应用（"包名/Activity"），默认「主界面」为空、由用户自行放入应用。
+ * 分类按 type 分为：
+ *  - 智能分类（最近搜索 / 最近使用 / 最近安装）：内容由代码自动生成，不可删除；
+ *    可改名（名称仅作显示，靠 type 识别）、可排序、可设为默认打开页。
+ *  - keyword  关键词规则：标签关键词 或 包名关键词，命中即归属（逗号分隔）。
+ *  - manual   手动分类：显式指定一组应用（"包名/Activity"），默认「主界面」为空、由用户自行放入应用。
  *
- * 配置以 JSON 存进 SharedPreferences("settings") 的 category_config 键，数组顺序即显示顺序。
+ * 全部分类（含智能分类）都以 JSON 存进 SharedPreferences("settings") 的 category_config 键，
+ * 数组顺序即显示顺序。旧版本配置不含智能分类，读取时自动补齐并持久化。
  */
 public final class CategoryConfig {
 
     public static final String TYPE_KEYWORD = "keyword";
     public static final String TYPE_MANUAL  = "manual";
 
-    /** 智能分类（固定、不可编辑），代码里靠这些名称判断 */
+    /** 智能分类 type：代码里靠 type（而非名称）判断归属，名称仅作显示 */
+    public static final String TYPE_SMART_SEARCH  = "smart_search";
+    public static final String TYPE_SMART_USE     = "smart_use";
+    public static final String TYPE_SMART_INSTALL = "smart_install";
+
+    /** 智能分类的默认显示名（可被用户改名，改名后以配置里的名称为准） */
     public static final String CAT_RECENT_SEARCH  = "最近搜索";
     public static final String CAT_RECENT_USE     = "最近使用";
     public static final String CAT_RECENT_INSTALL = "最近安装";
 
-    /** 默认「主界面」分类：手动类型、默认为空，不可删除 */
+    /** 默认「主界面」分类：手动类型、默认为空，不可删除、不可改名 */
     public static final String CAT_MAIN = "主界面";
 
     private static final String PREFS_NAME = "settings";
@@ -50,11 +55,11 @@ public final class CategoryConfig {
     /** 分类定义 */
     public static final class Category {
         public String name;
-        public String type;          // TYPE_KEYWORD / TYPE_MANUAL
+        public String type;          // TYPE_KEYWORD / TYPE_MANUAL / TYPE_SMART_*
         public String labelKeywords = ""; // keyword 类型：标签关键词，逗号分隔
         public String pkgKeywords   = ""; // keyword 类型：包名关键词，逗号分隔
         public List<String> apps;    // manual 类型：归属应用的 "包名/Activity" 列表
-        public boolean system;       // 主界面等内置分类，不可删除
+        public boolean system;       // 内置分类（主界面 + 智能分类），不可删除
 
         public Category(String name, String type) {
             this.name = name;
@@ -91,6 +96,10 @@ public final class CategoryConfig {
             cache = createDefaults();
             return cache;
         }
+        // 迁移：旧版本配置不含智能分类，缺失时补到末尾并持久化
+        if (ensureSmartCategories(out)) {
+            save(ctx, out);
+        }
         cache = out;
         return out;
     }
@@ -101,15 +110,29 @@ public final class CategoryConfig {
         return null;
     }
 
-    /** 是否为固定的智能分类（最近搜索/最近使用/最近安装） */
-    public static boolean isSmart(String name) {
-        return CAT_RECENT_SEARCH.equals(name)
-                || CAT_RECENT_USE.equals(name)
-                || CAT_RECENT_INSTALL.equals(name);
+    /** 是否为智能分类类型（最近搜索/最近使用/最近安装） */
+    public static boolean isSmartType(String type) {
+        return TYPE_SMART_SEARCH.equals(type)
+                || TYPE_SMART_USE.equals(type)
+                || TYPE_SMART_INSTALL.equals(type);
     }
 
-    /** 用户可编辑分类名（不含智能分类）的有序列表 */
-    public static List<String> getUserCategoryNames(Context ctx) {
+    /** 分类名对应的智能类型（TYPE_SMART_*），非智能分类或找不到时返回 null */
+    public static String smartTypeOf(Context ctx, String name) {
+        Category c = find(ctx, name);
+        return (c != null && isSmartType(c.type)) ? c.type : null;
+    }
+
+    /** 按智能类型查找分类显示名（用户可能已改名），找不到返回 null */
+    public static String findNameByType(Context ctx, String smartType) {
+        for (Category c : getAll(ctx)) {
+            if (smartType.equals(c.type)) return c.name;
+        }
+        return null;
+    }
+
+    /** 全部分类名的有序列表（含智能分类），数组顺序即显示顺序 */
+    public static List<String> getAllNames(Context ctx) {
         List<String> names = new ArrayList<>();
         for (Category c : getAll(ctx)) names.add(c.name);
         return names;
@@ -176,7 +199,7 @@ public final class CategoryConfig {
         main.system = true;
         list.add(main);
 
-        // 其余默认分类沿用原有关键词规则（keyword 类型）
+        // 默认用户分类沿用关键词规则（keyword 类型）
         list.add(kw("社交",     "微信,微博,qq,钉钉,飞书",     "com.tencent.mm,com.sina.weibo"));
         list.add(kw("影音",     "抖音,音乐,视频,哔哩",        "com.ss.android.ugc.aweme,com.netease.cloudmusic"));
         list.add(kw("交通出行",  "地图,滴滴,导航",            "com.sdu.didi.psnger,com.autonavi.minimap"));
@@ -184,6 +207,11 @@ public final class CategoryConfig {
         list.add(kw("游戏",     "游戏,斗地主",               "game"));
         list.add(kw("购物",     "淘宝,京东,拼多多",          "com.taobao,com.jingdong,com.xunmeng"));
         list.add(kw("理财",     "银行,支付宝,股票",          ""));
+
+        // 智能分类：内容自动生成，不可删除，可改名/排序/设为默认页
+        list.add(smart(TYPE_SMART_SEARCH, CAT_RECENT_SEARCH));
+        list.add(smart(TYPE_SMART_USE,    CAT_RECENT_USE));
+        list.add(smart(TYPE_SMART_INSTALL, CAT_RECENT_INSTALL));
         return list;
     }
 
@@ -192,6 +220,46 @@ public final class CategoryConfig {
         c.labelKeywords = labels;
         c.pkgKeywords   = pkgs;
         return c;
+    }
+
+    private static Category smart(String type, String name) {
+        Category c = new Category(name, type);
+        c.system = true;
+        return c;
+    }
+
+    /** 补齐缺失的智能分类（旧版本配置迁移），有改动返回 true */
+    private static boolean ensureSmartCategories(List<Category> list) {
+        boolean changed = false;
+        changed |= appendSmartIfMissing(list, TYPE_SMART_SEARCH, CAT_RECENT_SEARCH);
+        changed |= appendSmartIfMissing(list, TYPE_SMART_USE, CAT_RECENT_USE);
+        changed |= appendSmartIfMissing(list, TYPE_SMART_INSTALL, CAT_RECENT_INSTALL);
+        return changed;
+    }
+
+    private static boolean appendSmartIfMissing(List<Category> list, String type, String label) {
+        for (Category c : list) {
+            if (type.equals(c.type)) return false;
+        }
+        Category c = new Category(uniqueName(list, label), type);
+        c.system = true;
+        list.add(c);
+        return true;
+    }
+
+    /** 取一个不在 list 中的唯一名称（默认名被同名用户分类占用时加序号后缀） */
+    private static String uniqueName(List<Category> list, String base) {
+        String name = base;
+        int i = 2;
+        while (existsIn(list, name)) name = base + i++;
+        return name;
+    }
+
+    private static boolean existsIn(List<Category> list, String name) {
+        for (Category c : list) {
+            if (c.name.equals(name)) return true;
+        }
+        return false;
     }
 
     private static List<String> split(String s) {

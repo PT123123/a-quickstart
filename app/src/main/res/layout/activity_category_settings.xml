@@ -11,7 +11,7 @@
         android:layout_height="wrap_content"
         android:paddingHorizontal="16dp"
         android:paddingVertical="8dp"
-        android:text="智能分类「最近搜索 / 最近使用 / 最近安装」为系统固定，不可编辑。其余分类点击即可编辑，长按可删除。"
+        android:text="「最近搜索 / 最近使用 / 最近安装」为智能分类：内容自动生成，可改名、排序、设为默认，但不可删除。其余分类点击即可编辑，✕ 删除。"
         android:textColor="@color/hint_text"
         android:textSize="12sp" />
 
