@@ -3,9 +3,14 @@ package com.quickstart;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.MenuItem;
+import android.widget.Button;
 import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -15,6 +20,7 @@ import androidx.fragment.app.Fragment;
 import androidx.fragment.app.FragmentManager;
 import androidx.preference.ListPreference;
 import androidx.preference.Preference;
+import androidx.preference.PreferenceCategory;
 import androidx.preference.PreferenceFragmentCompat;
 import androidx.preference.PreferenceScreen;
 import androidx.viewpager2.adapter.FragmentStateAdapter;
@@ -26,8 +32,14 @@ import com.google.android.material.tabs.TabLayoutMediator;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 
+import com.quickstart.service.AdSkipAccessibilityService;
 import com.quickstart.util.BackgroundManager;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Executors;
 
 /**
@@ -35,12 +47,13 @@ import java.util.concurrent.Executors;
  */
 public class SettingsActivity extends AppCompatActivity {
 
-    private static final String[] TAB_TITLES = {"显示", "通用", "搜索", "键盘", "数据"};
+    private static final String[] TAB_TITLES = {"显示", "通用", "搜索", "键盘", "跳过", "数据"};
     private static final int[] TAB_XML_RES = {
             R.xml.prefs_display,
             R.xml.prefs_general,
             R.xml.prefs_search,
             R.xml.prefs_keyboard,
+            R.xml.prefs_skip,
             R.xml.prefs_data
     };
 
@@ -63,7 +76,7 @@ public class SettingsActivity extends AppCompatActivity {
         viewPager = findViewById(R.id.settings_viewpager);
         SettingsPagerAdapter pagerAdapter = new SettingsPagerAdapter(this);
         viewPager.setAdapter(pagerAdapter);
-        viewPager.setOffscreenPageLimit(4); // 保持相邻 fragment 存活，搜索时可访问
+        viewPager.setOffscreenPageLimit(TAB_XML_RES.length - 1); // 保持相邻 fragment 存活，搜索时可访问
 
         // TabLayout
         tabLayout = findViewById(R.id.settings_tabs);
@@ -331,6 +344,166 @@ public class SettingsActivity extends AppCompatActivity {
                             "缓存已清除，返回主界面将重新加载", Toast.LENGTH_SHORT).show();
                     return true;
                 });
+            }
+
+            // ===== 快跳过 =====
+            // 无障碍服务状态：点击前往系统设置开启/关闭
+            Preference adSkipStatus = findPreference("ad_skip_accessibility_status");
+            if (adSkipStatus != null) {
+                adSkipStatus.setOnPreferenceClickListener(pref -> {
+                    try {
+                        startActivity(new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                    } catch (Throwable t) {
+                        Toast.makeText(getContext(), "无法打开系统无障碍设置", Toast.LENGTH_SHORT).show();
+                    }
+                    return true;
+                });
+            }
+
+            // 自定义关键字管理
+            Preference keywordEdit = findPreference("ad_skip_keywords_edit");
+            if (keywordEdit != null) {
+                keywordEdit.setOnPreferenceClickListener(pref -> {
+                    showSkipKeywordEditor();
+                    return true;
+                });
+            }
+
+            // 坐标点击依赖 dispatchGesture（API 24+），低版本系统直接隐藏该组设置
+            PreferenceCategory coordCategory = findPreference("ad_skip_coordinate_category");
+            if (coordCategory != null && Build.VERSION.SDK_INT < 24) {
+                coordCategory.setVisible(false);
+            }
+        }
+
+        @Override
+        public void onResume() {
+            super.onResume();
+            refreshAdSkipStatus();
+        }
+
+        /** 刷新无障碍服务开启状态（从系统设置返回后自动更新） */
+        private void refreshAdSkipStatus() {
+            Preference status = findPreference("ad_skip_accessibility_status");
+            if (status == null || getContext() == null) return;
+            boolean enabled = AdSkipAccessibilityService.isServiceEnabled(getContext());
+            status.setSummary(enabled
+                    ? "已开启：正在监听应用开屏界面并自动点击「跳过」"
+                    : "未开启：点击前往系统设置 → 无障碍 → 快开启 →「快跳过」开启（必需）");
+        }
+
+        /** 快跳过：自定义关键字管理（内置关键字展示 + 自定义增删） */
+        private void showSkipKeywordEditor() {
+            android.content.Context ctx = requireContext();
+            SharedPreferences sp = getPreferenceManager().getSharedPreferences();
+            int pad = (int) (16 * getResources().getDisplayMetrics().density);
+            int padSm = (int) (8 * getResources().getDisplayMetrics().density);
+
+            LinearLayout root = new LinearLayout(ctx);
+            root.setOrientation(LinearLayout.VERTICAL);
+            root.setPadding(pad, pad, pad, 0);
+
+            TextView builtinLabel = new TextView(ctx);
+            builtinLabel.setText("内置关键字（不可删除）：\n"
+                    + android.text.TextUtils.join("、", AdSkipAccessibilityService.BUILTIN_KEYWORDS));
+            builtinLabel.setTextSize(13);
+            builtinLabel.setAlpha(0.75f);
+            root.addView(builtinLabel);
+
+            TextView customLabel = new TextView(ctx);
+            customLabel.setText("自定义关键字（点按条目即删除）：");
+            customLabel.setTextSize(13);
+            customLabel.setPadding(0, padSm, 0, 0);
+            root.addView(customLabel);
+
+            LinearLayout customList = new LinearLayout(ctx);
+            customList.setOrientation(LinearLayout.VERTICAL);
+            root.addView(customList);
+
+            LinearLayout addRow = new LinearLayout(ctx);
+            addRow.setOrientation(LinearLayout.HORIZONTAL);
+            addRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            addRow.setPadding(0, padSm, 0, 0);
+            EditText input = new EditText(ctx);
+            input.setHint("输入关键字，如：以后再说");
+            input.setSingleLine(true);
+            addRow.addView(input, new LinearLayout.LayoutParams(0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            Button addBtn = new Button(ctx);
+            addBtn.setText("添加");
+            addBtn.setOnClickListener(v -> {
+                String kw = input.getText().toString().trim();
+                if (kw.isEmpty()) return;
+                if (isDuplicateKeyword(kw, sp)) {
+                    Toast.makeText(ctx, "关键字已存在", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                Set<String> custom = new HashSet<>(sp.getStringSet(
+                        AdSkipAccessibilityService.PREF_CUSTOM_KEYWORDS, new HashSet<>()));
+                custom.add(kw);
+                sp.edit().putStringSet(AdSkipAccessibilityService.PREF_CUSTOM_KEYWORDS, custom).apply();
+                input.setText("");
+                renderCustomKeywords(customList, custom, sp);
+            });
+            addRow.addView(addBtn, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT));
+            root.addView(addRow);
+
+            renderCustomKeywords(customList,
+                    sp.getStringSet(AdSkipAccessibilityService.PREF_CUSTOM_KEYWORDS, new HashSet<>()), sp);
+
+            ScrollView scroll = new ScrollView(ctx);
+            scroll.addView(root);
+
+            new androidx.appcompat.app.AlertDialog.Builder(ctx)
+                    .setTitle("自定义跳过关键字")
+                    .setView(scroll)
+                    .setPositiveButton("完成", null)
+                    .show();
+        }
+
+        /** 关键字去重：与内置、已有自定义关键字比较（忽略大小写） */
+        private boolean isDuplicateKeyword(String kw, SharedPreferences sp) {
+            for (String b : AdSkipAccessibilityService.BUILTIN_KEYWORDS) {
+                if (b.equalsIgnoreCase(kw)) return true;
+            }
+            for (String exist : sp.getStringSet(
+                    AdSkipAccessibilityService.PREF_CUSTOM_KEYWORDS, new HashSet<>())) {
+                if (exist != null && exist.equalsIgnoreCase(kw)) return true;
+            }
+            return false;
+        }
+
+        private void renderCustomKeywords(LinearLayout container, Set<String> customs, SharedPreferences sp) {
+            container.removeAllViews();
+            android.content.Context ctx = container.getContext();
+            int padSm = (int) (8 * ctx.getResources().getDisplayMetrics().density);
+
+            if (customs.isEmpty()) {
+                TextView empty = new TextView(ctx);
+                empty.setText("（暂无自定义关键字）");
+                empty.setTextSize(14);
+                empty.setAlpha(0.5f);
+                empty.setPadding(0, padSm, 0, padSm);
+                container.addView(empty);
+                return;
+            }
+
+            List<String> sorted = new ArrayList<>(customs);
+            Collections.sort(sorted, String.CASE_INSENSITIVE_ORDER);
+            for (String kw : sorted) {
+                TextView row = new TextView(ctx);
+                row.setText("✕  " + kw);
+                row.setTextSize(16);
+                row.setPadding(0, padSm, 0, padSm);
+                row.setOnClickListener(v -> {
+                    Set<String> remain = new HashSet<>(customs);
+                    remain.remove(kw);
+                    sp.edit().putStringSet(AdSkipAccessibilityService.PREF_CUSTOM_KEYWORDS, remain).apply();
+                    renderCustomKeywords(container, remain, sp);
+                });
+                container.addView(row);
             }
         }
 
