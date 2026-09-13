@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <SwitchPreferenceCompat
+        android:key="ad_skip_enabled"
+        android:title="启用快跳过"
+        android:summary="自动跳过开屏广告（关键字 / 控件 / 坐标三种方式）。关闭后即使无障碍服务仍开启，也不会执行任何跳过操作"
+        android:defaultValue="true" />
+
+    <Preference
+        android:key="ad_skip_accessibility_status"
+        android:title="无障碍服务"
+        android:summary="检测中…"
+        android:dependency="ad_skip_enabled" />
+
+    <PreferenceCategory android:title="方法一 · 关键字匹配">
+        <SwitchPreferenceCompat
+            android:key="ad_skip_keyword_enabled"
+            android:title="启用关键字匹配"
+            android:summary="点击文本或描述含关键字的按钮（如「跳过」「Skip」）"
+            android:defaultValue="true"
+            android:dependency="ad_skip_enabled" />
+        <Preference
+            android:key="ad_skip_keywords_edit"
+            android:title="自定义关键字"
+            android:summary="添加或删除自定义跳过关键字（在内置关键字之外追加）"
+            android:dependency="ad_skip_enabled" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="方法二 · 控件匹配">
+        <SwitchPreferenceCompat
+            android:key="ad_skip_widget_enabled"
+            android:title="启用控件匹配"
+            android:summary="「跳过」文字与按钮分离时，点击其最近的可点击父控件；同时点击控件 ID 含 skip 的按钮"
+            android:defaultValue="true"
+            android:dependency="ad_skip_enabled" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:key="ad_skip_coordinate_category"
+        android:title="方法三 · 坐标点击兜底">
+        <SwitchPreferenceCompat
+            android:key="ad_skip_coordinate_enabled"
+            android:title="启用坐标点击"
+            android:summary="前两种方法都没找到按钮时，模拟点击屏幕指定位置（多数 App 的跳过按钮在右上角）。低于 Android 7.0 的系统不支持"
+            android:defaultValue="false"
+            android:dependency="ad_skip_enabled" />
+        <SeekBarPreference
+            android:key="ad_skip_coordinate_x"
+            android:title="点击位置 X（屏宽百分比）"
+            android:summary="0 = 最左侧，100 = 最右侧"
+            android:defaultValue="90"
+            android:max="100"
+            app:showSeekBarValue="true"
+            android:dependency="ad_skip_coordinate_enabled" />
+        <SeekBarPreference
+            android:key="ad_skip_coordinate_y"
+            android:title="点击位置 Y（屏高百分比）"
+            android:summary="0 = 最顶部，100 = 最底部"
+            android:defaultValue="8"
+            android:max="100"
+            app:showSeekBarValue="true"
+            android:dependency="ad_skip_coordinate_enabled" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="生效范围">
+        <ListPreference
+            android:key="ad_skip_time_window"
+            android:title="生效时间段"
+            android:summary="仅在应用打开后的一段时间内尝试跳过，避免误触普通界面里同样带「跳过」文字的按钮"
+            android:defaultValue="10000"
+            android:entries="@array/ad_skip_time_entries"
+            android:entryValues="@array/ad_skip_time_values"
+            android:dependency="ad_skip_enabled" />
+
+        <SwitchPreferenceCompat
+            android:key="ad_skip_toast_enabled"
+            android:title="跳过时显示提示"
+            android:summary="每次跳过成功时在屏幕下方显示蓝色提示气泡（应用名 + 命中方式）。使用无障碍悬浮窗，无需悬浮窗权限"
+            android:defaultValue="true"
+            android:dependency="ad_skip_enabled" />
+    </PreferenceCategory>
+</PreferenceScreen>

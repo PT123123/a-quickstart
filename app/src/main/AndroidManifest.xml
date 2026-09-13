@@ -88,10 +88,11 @@
             android:label="裁剪图片"
             android:theme="@style/AppTheme" />
 
-        <!-- 广告跳过无障碍服务 -->
+        <!-- 快跳过（开屏广告跳过）无障碍服务 -->
         <service
             android:name=".service.AdSkipAccessibilityService"
             android:exported="false"
+            android:label="@string/accessibility_service_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
