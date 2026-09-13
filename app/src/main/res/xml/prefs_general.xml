@@ -45,5 +45,5 @@
     <Preference
         android:key="category_manage"
         android:title="分类管理"
-        android:summary="添加、删除、编辑分类；「最近搜索/最近使用/最近安装」为固定智能分类" />
+        android:summary="添加、删除、编辑分类；智能分类（最近搜索/最近使用/最近安装）可改名、排序，不可删除" />
 </PreferenceScreen>

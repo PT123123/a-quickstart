@@ -33,14 +33,15 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * 分类管理：显示所有可编辑分类（智能分类不可编辑，不在此列出）。
- *  - 顶部：设置默认打开的分类、是否循环滑动。
- *  - 分类行：点击行编辑；▲/▼ 调整顺序；✕ 删除（「主界面」不可删除）。
+ * 分类管理：显示全部分类（含「主界面」与智能分类）。
+ *  - 智能分类（最近搜索/最近使用/最近安装）与「主界面」不可删除；智能分类可改名、排序、设为默认。
+ *  - 分类行：点击行编辑；▲/▼ 调整顺序；✕ 删除。
  *  - 顶栏「添加分类」：新建（关键词/手动）。
  *
  * 持久化：
  *  - 分类本体与增删改都经 {@link CategoryConfig} 保存。
- *  - 默认分类：SharedPreferences("settings").default_category（null/空=无）
+ *  - 默认分类：SharedPreferences("settings").default_category
+ *    （null=未设置过，跟随内置默认「最近使用」；""=全部应用；其他=分类名）
  *  - 循环滑动：SharedPreferences("settings").categories_loop（boolean）
  */
 public class CategorySettingsActivity extends AppCompatActivity {
@@ -89,6 +90,10 @@ public class CategorySettingsActivity extends AppCompatActivity {
 
     private void refreshDefaultSummary() {
         String def = prefs().getString(KEY_DEFAULT_CAT, null);
+        if (def == null) {
+            // 未设置过：跟随内置默认「最近使用」
+            def = CategoryConfig.findNameByType(this, CategoryConfig.TYPE_SMART_USE);
+        }
         if (def == null || def.isEmpty() || !CategoryConfig.exists(this, def)) {
             defaultCatValue.setText("全部应用");
         } else {
@@ -99,9 +104,13 @@ public class CategorySettingsActivity extends AppCompatActivity {
     private void showDefaultCategoryDialog() {
         List<String> names = new ArrayList<>();
         names.add("全部应用");
-        names.addAll(CategoryConfig.getUserCategoryNames(this));
+        names.addAll(CategoryConfig.getAllNames(this));
 
         String current = prefs().getString(KEY_DEFAULT_CAT, null);
+        if (current == null) {
+            // 未设置过：按内置默认「最近使用」高亮
+            current = CategoryConfig.findNameByType(this, CategoryConfig.TYPE_SMART_USE);
+        }
         int checked = 0;
         if (current != null && !current.isEmpty()) {
             int idx = names.indexOf(current);
@@ -112,7 +121,8 @@ public class CategorySettingsActivity extends AppCompatActivity {
                 .setTitle("默认打开分类")
                 .setSingleChoiceItems(names.toArray(new String[0]), checked, (d, which) -> {
                     if (which == 0) {
-                        prefs().edit().remove(KEY_DEFAULT_CAT).apply();
+                        // 显式选择「全部应用」存空串；null 留给内置默认「最近使用」
+                        prefs().edit().putString(KEY_DEFAULT_CAT, "").apply();
                     } else {
                         prefs().edit().putString(KEY_DEFAULT_CAT, names.get(which)).apply();
                     }
@@ -194,6 +204,10 @@ public class CategorySettingsActivity extends AppCompatActivity {
     // ==================== 编辑 / 删除 / 排序 ====================
 
     private void showEditDialog(CategoryConfig.Category c) {
+        if (CategoryConfig.isSmartType(c.type)) {
+            showSmartEditDialog(c);
+            return;
+        }
         if (CategoryConfig.TYPE_MANUAL.equals(c.type)) {
             showManualEditDialog(c);
             return;
@@ -239,17 +253,70 @@ public class CategorySettingsActivity extends AppCompatActivity {
                                 Toast.makeText(this, "已存在同名分类", Toast.LENGTH_SHORT).show();
                                 return;
                             }
+                            String oldName = target.name;
                             target.name = newName;
+                            renameDefaultIfMatched(oldName, newName);
                         }
                     }
                     target.labelKeywords = labelInput.getText().toString().trim();
                     target.pkgKeywords = pkgInput.getText().toString().trim();
                     CategoryConfig.save(this, list);
                     reload();
+                    refreshDefaultSummary();
                     Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show();
                 })
                 .setNegativeButton("取消", null)
                 .show();
+    }
+
+    /**
+     * 智能分类编辑：内容由代码自动生成，仅可改名（另外可排序、设为默认页），不可删除。
+     * 名称仅作显示，归属判断靠 type，因此改名不影响行为。
+     */
+    private void showSmartEditDialog(CategoryConfig.Category c) {
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(60, 0, 60, 0);
+
+        TextView note = new TextView(this);
+        note.setText("智能分类：内容由应用自动生成（不可挑选应用、不设关键词），仅可改名与调整顺序，不可删除。");
+        note.setTextSize(12);
+        body.addView(note);
+
+        final EditText nameInput = new EditText(this);
+        nameInput.setText(c.name);
+        nameInput.setHint("分类名称");
+        body.addView(nameInput);
+
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("编辑智能分类")
+                .setView(body)
+                .setPositiveButton("保存", (d, w) -> {
+                    String newName = nameInput.getText().toString().trim();
+                    if (newName.isEmpty() || newName.equals(c.name)) return;
+                    if (CategoryConfig.exists(this, newName)) {
+                        Toast.makeText(this, "已存在同名分类", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    List<CategoryConfig.Category> list = CategoryConfig.getAll(this);
+                    CategoryConfig.Category target = findByName(list, c.name);
+                    if (target == null) return;
+                    String oldName = target.name;
+                    target.name = newName;
+                    CategoryConfig.save(this, list);
+                    renameDefaultIfMatched(oldName, newName);
+                    reload();
+                    refreshDefaultSummary();
+                    Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    /** 分类改名后同步「默认打开分类」里存的旧名 */
+    private void renameDefaultIfMatched(String oldName, String newName) {
+        String def = prefs().getString(KEY_DEFAULT_CAT, null);
+        if (oldName.equals(def)) prefs().edit().putString(KEY_DEFAULT_CAT, newName).apply();
     }
 
     private void showManualEditDialog(CategoryConfig.Category c) {
@@ -355,11 +422,14 @@ public class CategorySettingsActivity extends AppCompatActivity {
         public void onBindViewHolder(@NonNull VH holder, int position) {
             final CategoryConfig.Category c = items.get(position);
             holder.name.setText(c.name);
-            boolean kw = CategoryConfig.TYPE_KEYWORD.equals(c.type);
-            holder.type.setText(kw
-                    ? ("关键词 · " + countKeywords(c) + " 词")
-                    : ("手动 · " + c.apps.size() + " 应用"));
-            // 内置分类（主界面）不可删除
+            if (CategoryConfig.isSmartType(c.type)) {
+                holder.type.setText("智能 · 自动归类");
+            } else if (CategoryConfig.TYPE_KEYWORD.equals(c.type)) {
+                holder.type.setText("关键词 · " + countKeywords(c) + " 词");
+            } else {
+                holder.type.setText("手动 · " + c.apps.size() + " 应用");
+            }
+            // 内置分类（主界面 + 智能分类）不可删除
             holder.actions.setVisibility(c.system ? View.INVISIBLE : View.VISIBLE);
 
             holder.itemView.setOnClickListener(v -> showEditDialog(c));
