@@ -572,40 +572,11 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         String curSmart = smartTypeOf(currentCategory);
         // 「最近搜索」叠加 T9 输入时需要按 包名/Activity 判断命中，提前构建历史键集合
         searchHistoryKeys = CategoryConfig.TYPE_SMART_SEARCH.equals(curSmart) ? loadHistoryKeys() : null;
-        filtered = new ArrayList<>();
-        if (q.isEmpty() && currentCategory == null) {
-            for (AppEntry e : allApps) {
-                if (!hidden.contains(e.packageName)) filtered.add(e);
-            }
-        } else if (q.isEmpty() && CategoryConfig.TYPE_SMART_SEARCH.equals(curSmart)) {
-            filtered = buildRecentSearched(hidden);
-        } else if (q.isEmpty() && CategoryConfig.TYPE_SMART_USE.equals(curSmart)) {
-            filtered = buildRecentlyUsed(hidden);
-        } else if (q.isEmpty() && CategoryConfig.TYPE_SMART_INSTALL.equals(curSmart)) {
-            filtered = buildRecentlyInstalled(hidden);
-        } else {
-            for (AppEntry e : allApps) {
-                if (hidden.contains(e.packageName)) continue;
-                // 使用增强匹配：支持混合输入、英文分词、中英混合等
-                boolean matchQuery = q.isEmpty() || T9Matcher.matchesEnhanced(q, e);
-                // query 非空时全局搜索（忽略分类），query 为空时按分类过滤
-                boolean matchCat = !q.isEmpty() || currentCategory == null || matchCategory(e, currentCategory);
-                if (matchQuery && matchCat) filtered.add(e);
-            }
-            // 有搜索词时按权重排序（使用频率 + 最近使用时间）
-            if (!q.isEmpty()) {
-                sortBySearchWeight(filtered, q);
-            }
-        }
-        adapter.setHighlightQuery(q);
-        adapter.submit(filtered);
-        if (filtered.isEmpty()) {
-            emptyHint.setText(emptyHintText());
-            emptyHint.setVisibility(View.VISIBLE);
-        } else {
-            emptyHint.setVisibility(View.GONE);
-        }
-        // 始终保持 RecyclerView 可见，使空列表时仍能接收左右滑动手势切换分类
+
+        // 当前视图的过滤结果：供空态/角标快启/自动启动使用。
+        // 注意：这里不再向从不显示的共享 adapter 发送 submit，避免每次白跑一趟全量 DiffUtil。
+        filtered = buildPageList(q, currentCategory, hidden);
+        updateEmptyHint();
 
         // 更新所有页 Adapter（T9 搜索时所有页都显示全局结果，无搜索时按分类过滤）
         for (int page = 0; page < pageAdapters.size(); page++) {
@@ -618,7 +589,43 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         syncLiveFragments();
     }
 
-    private void filterPage(AppListAdapter pageAdapter, String q, String category, java.util.Set<String> hidden) {
+    /**
+     * 返回启动器、清空搜索词时只重建当前可见页，恢复该页的分类视图。
+     * 邻页仍保留切走前的显示，用户滑到时由 syncPage → doFilter 自动补齐，
+     * 避免返回瞬间对全部分类页一次性重绘 + DiffUtil，显著降低切回卡顿。
+     */
+    private void refreshCurrentPageOnly() {
+        java.util.Set<String> hidden = getHiddenPackages();
+        filtered = buildPageList("", currentCategory, hidden);
+        updateEmptyHint();
+
+        int page = currentCategory == null ? 0 : getCategoryPageIndex(currentCategory);
+        if (page >= 0 && page < pageAdapters.size()) {
+            AppListAdapter pageAdapter = pageAdapters.get(page);
+            pageAdapter.setHighlightQuery("");
+            pageAdapter.submit(filtered);
+        }
+
+        t9Display.setText("");
+        t9Hint.setText(buildHint());
+    }
+
+    /** 根据当前 filtered 是否为空更新空态提示文案与显示 */
+    private void updateEmptyHint() {
+        if (filtered.isEmpty()) {
+            emptyHint.setText(emptyHintText());
+            emptyHint.setVisibility(View.VISIBLE);
+        } else {
+            emptyHint.setVisibility(View.GONE);
+        }
+    }
+
+    /**
+     * 构建分类页的展示数据（纯数据，不触碰 RecyclerView）。
+     * 返回的列表由调用方决定提交给某一页，还是作为当前视图的 filtered。
+     * doFilter 与 refreshCurrentPageOnly 共用，避免重复实现智能分类分支。
+     */
+    private List<AppEntry> buildPageList(String q, String category, java.util.Set<String> hidden) {
         List<AppEntry> pageFiltered = new ArrayList<>();
         String smart = smartTypeOf(category);
 
@@ -628,11 +635,11 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                 if (!hidden.contains(e.packageName)) pageFiltered.add(e);
             }
         } else if (q.isEmpty() && CategoryConfig.TYPE_SMART_SEARCH.equals(smart)) {
-            pageFiltered = buildRecentSearched(hidden);
+            return buildRecentSearched(hidden);
         } else if (q.isEmpty() && CategoryConfig.TYPE_SMART_USE.equals(smart)) {
-            pageFiltered = buildRecentlyUsed(hidden);
+            return buildRecentlyUsed(hidden);
         } else if (q.isEmpty() && CategoryConfig.TYPE_SMART_INSTALL.equals(smart)) {
-            pageFiltered = buildRecentlyInstalled(hidden);
+            return buildRecentlyInstalled(hidden);
         } else if (!q.isEmpty()) {
             // T9 搜索：全局搜索，忽略分类限制，使用增强匹配
             for (AppEntry e : allApps) {
@@ -649,8 +656,12 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                 if (matchCategory(e, category)) pageFiltered.add(e);
             }
         }
+        return pageFiltered;
+    }
+
+    private void filterPage(AppListAdapter pageAdapter, String q, String category, java.util.Set<String> hidden) {
         pageAdapter.setHighlightQuery(q);
-        pageAdapter.submit(pageFiltered);
+        pageAdapter.submit(buildPageList(q, category, hidden));
     }
 
     /** 空态提示文案：按当前筛选模式区分 */
@@ -1802,7 +1813,8 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
             pendingQueryClear = false;
             if (query.length() > 0) {
                 query.setLength(0);
-                onQueryChanged();
+                // 仅重建当前可见页以恢复分类视图，避免返回瞬间全页重绘 + DiffUtil 造成卡顿
+                refreshCurrentPageOnly();
             }
             // 回到启动器：应用列表滚回顶部（第一行可见），并复位下拉悬停
             resetListToTop();
