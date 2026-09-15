@@ -21,6 +21,9 @@ import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityManager;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.View;
+import android.widget.Button;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -31,6 +34,7 @@ import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -96,8 +100,11 @@ public class AdSkipAccessibilityService extends AccessibilityService {
     /** 单次应用打开内最多点击次数：防止「点击→界面变化→再点击」的循环误点 */
     private static final int MAX_CLICKS_PER_OPEN = 4;
 
-    /** 跳过提示悬浮窗显示时长 */
-    private static final long OVERLAY_DURATION_MS = 1600;
+    /** 跳过提示悬浮窗显示时长（延长到 3.5 秒，给用户足够时间点击撤销） */
+    private static final long OVERLAY_DURATION_MS = 3500;
+
+    /** 撤销抑制的持续时间（毫秒）：点击撤销后 30 秒内不再对该应用执行关键字跳过 */
+    private static final long SUPPRESS_DURATION_MS = 30_000;
 
     // ---- 配置缓存（设置改动时通过监听器即时刷新） ----
     private volatile boolean masterEnabled = true;
@@ -121,10 +128,19 @@ public class AdSkipAccessibilityService extends AccessibilityService {
 
     // ---- 跳过提示悬浮窗（TYPE_ACCESSIBILITY_OVERLAY：无障碍服务专属，免权限） ----
     private WindowManager windowManager;
-    private TextView overlayView;
+    private LinearLayout overlayView;
+    private TextView overlayText;
+    private Button undoButton;
     private boolean overlayAttached = false;
+    private String lastSkipPkg;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Runnable overlayHideRunnable = this::hideOverlay;
+
+    // ---- 撤销抑制机制 ----
+    /** 临时被抑制的应用包名 -> 抑制到期时间戳 */
+    private final HashMap<String, Long> suppressedApps = new HashMap<>();
+    /** 当前事件中关键字是否被临时抑制（matchSource 使用） */
+    private boolean keywordSuppressedThisEvent = false;
 
     private final SharedPreferences.OnSharedPreferenceChangeListener prefsListener =
             (sp, key) -> {
@@ -143,6 +159,7 @@ public class AdSkipAccessibilityService extends AccessibilityService {
     public boolean onUnbind(Intent intent) {
         mainHandler.removeCallbacks(overlayHideRunnable);
         hideOverlay();
+        suppressedApps.clear();
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .unregisterOnSharedPreferenceChangeListener(prefsListener);
         return super.onUnbind(intent);
@@ -233,6 +250,15 @@ public class AdSkipAccessibilityService extends AccessibilityService {
             return;
         }
 
+        // ---- 临时抑制检查（撤销功能） ----
+        // 清理过期抑制项，当前包名若在抑制列表中则跳过关键字匹配
+        long nowSuppress = SystemClock.elapsedRealtime();
+        Iterator<Map.Entry<String, Long>> suppressIt = suppressedApps.entrySet().iterator();
+        while (suppressIt.hasNext()) {
+            if (nowSuppress >= suppressIt.next().getValue()) suppressIt.remove();
+        }
+        keywordSuppressedThisEvent = suppressedApps.containsKey(pkg);
+
         int hit = searchAndClick(root);
         if (hit != HIT_NONE) {
             lastClickAt = now;
@@ -285,7 +311,7 @@ public class AdSkipAccessibilityService extends AccessibilityService {
 
     /** 节点是否命中任一开启的匹配方法，返回命中方式 */
     private int matchSource(AccessibilityNodeInfo node) {
-        if (keywordEnabled && matchesKeyword(node)) return HIT_KEYWORD;
+        if (keywordEnabled && !keywordSuppressedThisEvent && matchesKeyword(node)) return HIT_KEYWORD;
         if (widgetEnabled && matchesViewId(node)) return HIT_VIEW_ID;
         return HIT_NONE;
     }
@@ -351,8 +377,12 @@ public class AdSkipAccessibilityService extends AccessibilityService {
      * Toast 在 MIUI/HyperOS 等系统上会被「后台弹出限制」静默拦截，
      * 而无障碍悬浮窗随无障碍服务天然获得显示能力，无需任何额外权限。
      * TYPE_ACCESSIBILITY_OVERLAY 需 API 22+，更低版本退回 Toast。
+     *
+     * 悬浮窗内包含「撤销」按钮——用户误触发关键字跳过时，可点击撤销临时屏蔽
+     * 该应用的关键字跳过（30 秒）。
      */
     private void showSkipFeedback(String pkg, String method) {
+        lastSkipPkg = pkg;
         String text = "快跳过 ·「" + appLabel(pkg) + "」" + method;
         if (Build.VERSION.SDK_INT >= 22) {
             showOverlay(text);
@@ -370,14 +400,14 @@ public class AdSkipAccessibilityService extends AccessibilityService {
             if (overlayView == null) {
                 overlayView = buildOverlayView();
             }
-            overlayView.setText(text);
+            overlayText.setText(text);
             if (!overlayAttached) {
                 WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
                         WindowManager.LayoutParams.WRAP_CONTENT,
                         WindowManager.LayoutParams.WRAP_CONTENT,
                         WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                                | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                                | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                                 | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                         PixelFormat.TRANSLUCENT);
                 lp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
@@ -393,19 +423,77 @@ public class AdSkipAccessibilityService extends AccessibilityService {
         }
     }
 
-    /** 构建提示悬浮窗：圆角蓝色底（应用主色 #1565C0）+ 白字，样式贴近系统 Toast */
-    private TextView buildOverlayView() {
+    /**
+     * 构建提示悬浮窗：LinearLayout 内含提示文字 + 撤销按钮。
+     * 撤销按钮点击后将当前应用的关键字跳过临时屏蔽 30 秒，防止误触。
+     */
+    private LinearLayout buildOverlayView() {
         float density = getResources().getDisplayMetrics().density;
-        TextView tv = new TextView(this);
-        tv.setTextColor(0xFFFFFFFF);
-        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        tv.setPadding((int) (18 * density), (int) (10 * density),
-                (int) (18 * density), (int) (10 * density));
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(0xF01565C0);
-        bg.setCornerRadius(22 * density);
-        tv.setBackground(bg);
-        return tv;
+        int cornerRadius = (int) (22 * density);
+
+        // 外层容器
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.HORIZONTAL);
+        container.setGravity(Gravity.CENTER_VERTICAL);
+
+        GradientDrawable containerBg = new GradientDrawable();
+        containerBg.setColor(0xF01565C0);
+        containerBg.setCornerRadius(cornerRadius);
+        container.setBackground(containerBg);
+        container.setPadding((int) (18 * density), (int) (10 * density),
+                (int) (10 * density), (int) (10 * density));
+
+        // 提示文字
+        overlayText = new TextView(this);
+        overlayText.setTextColor(0xFFFFFFFF);
+        overlayText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        LinearLayout.LayoutParams textLp = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        overlayText.setLayoutParams(textLp);
+        container.addView(overlayText);
+
+        // 撤销按钮
+        undoButton = new Button(this);
+        undoButton.setText("撤销");
+        undoButton.setTextColor(0xFFFFFFFF);
+        undoButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        undoButton.setAllCaps(false);
+        undoButton.setMinWidth(0);
+        undoButton.setClickable(true);
+        undoButton.setFocusable(true);
+
+        // 撤销按钮样式：半透明白色圆角背景
+        GradientDrawable btnBg = new GradientDrawable();
+        btnBg.setColor(0x33FFFFFF);
+        btnBg.setCornerRadius(cornerRadius);
+        undoButton.setBackground(btnBg);
+
+        int btnPadH = (int) (14 * density);
+        int btnPadV = (int) (6 * density);
+        undoButton.setPadding(btnPadH, btnPadV, btnPadH, btnPadV);
+
+        LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        btnLp.leftMargin = (int) (12 * density);
+        undoButton.setLayoutParams(btnLp);
+
+        undoButton.setOnClickListener(v -> undoSkip());
+        container.addView(undoButton);
+
+        return container;
+    }
+
+    /** 撤销按钮点击处理：临时屏蔽当前应用的关键字跳过 30 秒 */
+    private void undoSkip() {
+        if (lastSkipPkg != null) {
+            suppressedApps.put(lastSkipPkg,
+                    SystemClock.elapsedRealtime() + SUPPRESS_DURATION_MS);
+            Toast.makeText(this,
+                    "已撤销，30 秒内不再对「" + appLabel(lastSkipPkg) + "」执行关键字跳过",
+                    Toast.LENGTH_SHORT).show();
+        }
+        hideOverlay();
     }
 
     /** 移除提示悬浮窗 */
