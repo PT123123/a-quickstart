@@ -588,7 +588,7 @@ public class SettingsActivity extends AppCompatActivity {
                 int n = com.quickstart.util.ConfigTransfer.applyConfigJson(requireContext(), text);
 
                 Toast.makeText(requireContext(),
-                        "已导入 " + n + " 项配置，重启应用生效", Toast.LENGTH_LONG).show();
+                        "已导入 " + n + " 项配置，返回主界面即生效", Toast.LENGTH_LONG).show();
             } catch (Throwable t) {
                 Toast.makeText(requireContext(), "导入失败: " + t.getMessage(), Toast.LENGTH_SHORT).show();
             }

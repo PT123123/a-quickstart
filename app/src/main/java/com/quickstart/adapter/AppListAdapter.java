@@ -52,6 +52,8 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
     private String highlightQuery = "";
     private String lastHighlight = "";
     private int fontColor = 0;
+    /** 出厂文字颜色（ColorStateList），fontColor 为 0 时恢复用 */
+    private android.content.res.ColorStateList defaultFontColors;
     private boolean showRecentDot = true;
     private int columnCount = 3;
     /** 图标透明度对应的 View alpha（1f 完全不透明，0f 完全不可见） */
@@ -72,6 +74,12 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
     }
     public void setShowRecentDot(boolean show) { this.showRecentDot = show; notifyDataSetChanged(); }
     public void setColumnCount(int count) { this.columnCount = count; notifyDataSetChanged(); }
+
+    /** 角标手势设置变化后调用：清除缓存并整体重绑，已显示的角标立即换用新手势 */
+    public void invalidateBadgeGesture() {
+        badgeGestureMode = null;
+        notifyDataSetChanged();
+    }
 
     public void submit(List<AppEntry> list) {
         List<AppEntry> newList = list != null ? list : new ArrayList<>();
@@ -112,14 +120,23 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
         }
         View v = LayoutInflater.from(parent.getContext())
                 .inflate(R.layout.item_app, parent, false);
-        return new VH(v);
+        VH holder = new VH(v);
+        if (defaultFontColors == null) {
+            // 记录出厂文字颜色，字体颜色被清空时（fontColor=0）恢复用
+            defaultFontColors = holder.name.getTextColors();
+        }
+        return holder;
     }
 
     @Override
     public void onBindViewHolder(@NonNull VH h, int position) {
         AppEntry e = items.get(position);
         h.name.setText(buildHighlightedLabel(e));
-        if (fontColor != 0) h.name.setTextColor(fontColor);
+        if (fontColor != 0) {
+            h.name.setTextColor(fontColor);
+        } else if (defaultFontColors != null) {
+            h.name.setTextColor(defaultFontColors); // 恢复默认配色（清除自定义字体颜色后）
+        }
 
         // 图标延迟加载
         if (e.icon != null) {
