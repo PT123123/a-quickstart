@@ -7,3 +7,10 @@ local.properties
 *.apk
 *.png
 .workbuddy/
+*.jks
+*.p12
+keystore.properties
+*.jks
+*.p12
+keystore.properties
+kp.txt
