@@ -88,6 +88,20 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
     /** 已应用的图标透明度百分比；-1 表示尚未应用（用于变化检测，避免 onResume 无谓刷新列表） */
     private int lastIconTransparency = -1;
 
+    /**
+     * 已应用的设置签名（分组）。onResume 时逐组比对，只有真正变化的组才重新应用，
+     * 这样设置改动无需重启即可生效，也不会每次返回都全量刷新。
+     */
+    private String appliedUiSig = "";
+    private String appliedWindowSig = "";
+    private String appliedGestureSig = "";
+    private String appliedDataSig = "";
+    private String appliedKeyBindSig = "";
+    private String appliedDefaultCatSig = "";
+    /** 下拉悬停监听当前挂载的内部 RecyclerView 与监听器（开关变化时需先摘掉旧的再重挂） */
+    private RecyclerView pullDownHoverTarget;
+    private RecyclerView.OnItemTouchListener pullDownHoverListener;
+
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     /** 主线程 Handler 的弱引用，供静态异步任务使用 */
@@ -161,7 +175,9 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         // 锚定初始位置：若开启了循环滑动，则从基准页出发，保证左右都能无限滑动
         loopSwipe = getSharedPreferences("settings", MODE_PRIVATE)
                 .getBoolean("categories_loop", true);
-        categoryTabsSignature = String.join("|", categoryTabs) + "|loop=" + loopSwipe;
+        categoryTabsSignature = String.join("|", categoryTabs) + "|loop=" + loopSwipe
+                + "|cfg=" + getSharedPreferences("settings", MODE_PRIVATE)
+                        .getString("category_config", "");
 
         // ViewPager2 使用 FragmentStateAdapter：每个 page 是一个 Fragment（内部放 RecyclerView）
         // 这是 ViewPager2 连续滑动过渡的必要条件：如果 page 直接是 RecyclerView，
@@ -183,21 +199,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
 
         // 应用「默认打开分类」设置：未设置过(null)默认打开「最近使用」；""=全部应用；其他=分类名。
         // 无动画锚定，避免循环滑动下长距离滚动
-        String defaultCat = getSharedPreferences("settings", MODE_PRIVATE)
-                .getString("default_category", null);
-        int startIdx;
-        if (defaultCat == null) {
-            String defName = CategoryConfig.findNameByType(this, CategoryConfig.TYPE_SMART_USE);
-            startIdx = defName == null ? 0 : getCategoryPageIndex(defName);
-        } else {
-            startIdx = defaultCat.isEmpty() ? 0 : getCategoryPageIndex(defaultCat);
-        }
-        int n = getPageCount();
-        int anchor = loopSwipe ? LOOP_BASE_MULT * n + startIdx : startIdx;
-        if (viewPager.getCurrentItem() != anchor) {
-            viewPager.setCurrentItem(anchor, false); // 无动画
-        }
-        syncPage(startIdx);
+        applyDefaultCategory();
 
         // 应用列表动画设置
         applyListAnimationSetting();
@@ -236,19 +238,13 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         setupKeypad();
         setupPullDownHover();
         loadAppsAsync();
+
+        // 记录当前设置签名：首次 onResume 才不会误判为「有变化」而重复刷新
+        captureSettingsSignatures();
     }
 
     private void setupKeypad() {
-        // 数字键 1~9
-        int[] keyIds = {R.id.key_1, R.id.key_2, R.id.key_3, R.id.key_4, R.id.key_5,
-                        R.id.key_6, R.id.key_7, R.id.key_8, R.id.key_9};
-        for (int i = 0; i < keyIds.length; i++) {
-            int digit = i + 1;
-            View key = keypad.findViewById(keyIds[i]);
-            setupKeyGesture(key, digit);
-        }
-        View key0 = keypad.findViewById(R.id.key_0);
-        setupKeyGesture(key0, 0);
+        bindKeyGestures();
         keypad.findViewById(R.id.key_clear).setOnClickListener(v -> clearQuery());
         keypad.findViewById(R.id.key_back).setOnClickListener(v -> onBackspace());
 
@@ -268,6 +264,19 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
 
         // 底部区域上滑展开键盘
         setupBottomSwipeToExpand();
+    }
+
+    /**
+     * 为数字键 0~9 绑定手势。灵敏度设置（上滑距离/长按时长）变化时可重复调用，
+     * 新监听会替换旧监听，无需重启。
+     */
+    private void bindKeyGestures() {
+        int[] keyIds = {R.id.key_1, R.id.key_2, R.id.key_3, R.id.key_4, R.id.key_5,
+                        R.id.key_6, R.id.key_7, R.id.key_8, R.id.key_9};
+        for (int i = 0; i < keyIds.length; i++) {
+            setupKeyGesture(keypad.findViewById(keyIds[i]), i + 1);
+        }
+        setupKeyGesture(keypad.findViewById(R.id.key_0), 0);
     }
 
     /** 底部区域上滑手势：键盘收起时，上滑可展开键盘 */
@@ -1081,25 +1090,29 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         return sp.getInt("column_count", 3);
     }
 
-    /** 应用窗口大小设置 */
+    /** 应用窗口大小设置（改回 full 也立即恢复全屏，无需重启） */
     private void applyWindowSize() {
         String size = getSharedPreferences("settings", MODE_PRIVATE)
                 .getString("window_size", "full");
-        if (!"full".equals(size)) {
-            int screenW = getResources().getDisplayMetrics().widthPixels;
-            int screenH = getResources().getDisplayMetrics().heightPixels;
-            int w, h;
-            if ("small".equals(size)) {
-                w = (int) (screenW * 0.5);
-                h = (int) (screenH * 0.5);
-            } else { // medium
-                w = (int) (screenW * 0.75);
-                h = (int) (screenH * 0.75);
-            }
-            // 使用 setLayout 更可靠地设置窗口大小
-            getWindow().setLayout(w, h);
-            getWindow().setGravity(android.view.Gravity.CENTER);
+        if ("full".equals(size)) {
+            getWindow().setLayout(WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.MATCH_PARENT);
+            getWindow().setGravity(android.view.Gravity.TOP);
+            return;
         }
+        int screenW = getResources().getDisplayMetrics().widthPixels;
+        int screenH = getResources().getDisplayMetrics().heightPixels;
+        int w, h;
+        if ("small".equals(size)) {
+            w = (int) (screenW * 0.5);
+            h = (int) (screenH * 0.5);
+        } else { // medium
+            w = (int) (screenW * 0.75);
+            h = (int) (screenH * 0.75);
+        }
+        // 使用 setLayout 更可靠地设置窗口大小
+        getWindow().setLayout(w, h);
+        getWindow().setGravity(android.view.Gravity.CENTER);
     }
 
     /**
@@ -1217,18 +1230,22 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         }
     }
 
-    /** 应用字体颜色 */
+    /** 应用字体颜色（清空颜色时恢复默认配色，无需重启） */
     private void applyFontColor() {
         String color = getSharedPreferences("settings", MODE_PRIVATE)
                 .getString("font_color", "");
+        int parsed = 0; // 0 = 使用默认文字颜色
         if (!color.isEmpty()) {
             try {
-                int fontColor = Color.parseColor(color);
-                adapter.setFontColor(fontColor);
-                for (AppListAdapter a : pageAdapters) a.setFontColor(fontColor);
-                updateAllFragments(f -> f.setFontColor(fontColor));
-            } catch (Exception ignored) {}
+                parsed = Color.parseColor(color);
+            } catch (Exception ignored) {
+                parsed = 0;
+            }
         }
+        final int fontColor = parsed;
+        adapter.setFontColor(fontColor);
+        for (AppListAdapter a : pageAdapters) a.setFontColor(fontColor);
+        updateAllFragments(f -> f.setFontColor(fontColor));
     }
 
     /**
@@ -1245,6 +1262,163 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         adapter.setIconAlpha(alpha);
         for (AppListAdapter a : pageAdapters) a.setIconAlpha(alpha);
         updateAllFragments(f -> f.setIconAlpha(alpha));
+    }
+
+    /** 应用列数设置（列数改变即时生效） */
+    private void applyColumnCount() {
+        int columnCount = getColumnCount();
+        adapter.setColumnCount(columnCount);
+        for (AppListAdapter a : pageAdapters) a.setColumnCount(columnCount);
+        updateAllFragments(f -> f.setColumnCount(columnCount));
+    }
+
+    /** 应用「最近更新圆点」开关 */
+    private void applyRecentDot() {
+        boolean show = getSharedPreferences("settings", MODE_PRIVATE)
+                .getBoolean("recent_app_dot", true);
+        adapter.setShowRecentDot(show);
+        for (AppListAdapter a : pageAdapters) a.setShowRecentDot(show);
+        updateAllFragments(f -> f.setShowRecentDot(show));
+    }
+
+    /**
+     * 应用「默认打开分类」：未设置过(null)默认「最近使用」；""=全部应用；其他=分类名。
+     * 从设置返回时也被调用，改了默认分类立即跳过去。
+     */
+    private void applyDefaultCategory() {
+        String defaultCat = getSharedPreferences("settings", MODE_PRIVATE)
+                .getString("default_category", null);
+        int idx;
+        if (defaultCat == null) {
+            String defName = CategoryConfig.findNameByType(this, CategoryConfig.TYPE_SMART_USE);
+            idx = defName == null ? 0 : getCategoryPageIndex(defName);
+        } else {
+            idx = defaultCat.isEmpty() ? 0 : getCategoryPageIndex(defaultCat);
+        }
+        int n = getPageCount();
+        int anchor = loopSwipe ? LOOP_BASE_MULT * n + idx : idx;
+        if (viewPager.getCurrentItem() != anchor) {
+            viewPager.setCurrentItem(anchor, false); // 无动画
+        }
+        syncPage(idx);
+    }
+
+    // ==================== 设置即时生效（onResume 检测变化后重新应用） ====================
+
+    /** 记录当前设置签名。onCreate 各项设置应用完毕后调用，避免首次 onResume 重复刷新 */
+    private void captureSettingsSignatures() {
+        SharedPreferences sp = getSharedPreferences("settings", MODE_PRIVATE);
+        appliedUiSig = uiSignature(sp);
+        appliedWindowSig = windowSignature(sp);
+        appliedGestureSig = gestureSignature(sp);
+        appliedDataSig = dataSignature(sp);
+        appliedKeyBindSig = keyBindSignature(sp);
+        appliedDefaultCatSig = sp.getString("default_category", "\u0000");
+    }
+
+    /** 列表外观签名：列数 / 字体颜色 / 图标透明度 / 最近更新圆点 / 列表动画 / 角标手势 */
+    private String uiSignature(SharedPreferences sp) {
+        return getColumnCount()
+                + "|" + sp.getString("font_color", "")
+                + "|" + sp.getInt("icon_transparency", 60)
+                + "|" + sp.getBoolean("recent_app_dot", true)
+                + "|" + sp.getString("list_animation", "off")
+                + "|" + sp.getString("key_gesture", "long_press");
+    }
+
+    /** 窗口与背景签名 */
+    private String windowSignature(SharedPreferences sp) {
+        return sp.getString("window_size", "full")
+                + "|" + sp.getString("background_color", "")
+                + "|" + sp.getString(BackgroundManager.PREF_IMAGE, "")
+                + "|" + sp.getString(BackgroundManager.PREF_BLUR, BackgroundManager.NONE);
+    }
+
+    /** 手势签名：数字键上滑距离 / 长按时长 / 下拉悬停开关 */
+    private String gestureSignature(SharedPreferences sp) {
+        return sp.getString("swipe_distance", "60")
+                + "|" + sp.getString("long_press_duration", "400")
+                + "|" + sp.getBoolean("pull_down_hover", true);
+    }
+
+    /** 数字键绑定签名：绑定关系改了要重新加载按键上的应用图标 */
+    private String keyBindSignature(SharedPreferences sp) {
+        StringBuilder sb = new StringBuilder();
+        for (int d = 0; d <= 9; d++) {
+            sb.append(sp.getString("key_bind_" + d, "")).append(',');
+        }
+        return sb.toString();
+    }
+
+    /** 数据签名：隐藏应用 / 最近更新范围 / 支付宝快捷方式（这三项都要重新扫描列表） */
+    private String dataSignature(SharedPreferences sp) {
+        java.util.TreeSet<String> hidden = new java.util.TreeSet<>();
+        for (String p : sp.getStringSet("hidden_apps", java.util.Collections.emptySet())) {
+            if (p != null) hidden.add(p);
+        }
+        return sp.getString("recent_time_range", "604800000")
+                + "|" + sp.getBoolean("alipay_shortcuts", true)
+                + "|" + hidden;
+    }
+
+    /**
+     * 从设置页返回时，把改过的设置重新应用一遍（无需重启）。
+     * 分组比对签名，只有变化的组才重新应用，避免每次返回都全量刷新。
+     */
+    private void applyChangedSettingsOnResume() {
+        SharedPreferences sp = getSharedPreferences("settings", MODE_PRIVATE);
+
+        // 1) 列表外观：列数 / 字体颜色 / 图标透明度 / 最近更新圆点 / 列表动画 / 角标手势
+        String uiSig = uiSignature(sp);
+        if (!uiSig.equals(appliedUiSig)) {
+            appliedUiSig = uiSig;
+            applyColumnCount();
+            applyFontColor();
+            applyIconTransparency();
+            applyRecentDot();
+            applyListAnimationSetting();
+            // 角标手势在绑定时缓存，整体重绑才能立即换用新手势
+            adapter.invalidateBadgeGesture();
+            for (AppListAdapter a : pageAdapters) a.invalidateBadgeGesture();
+        }
+
+        // 2) 窗口与背景：窗口尺寸变了要重新实测列表区域，背景才不会被拉伸
+        String windowSig = windowSignature(sp);
+        if (!windowSig.equals(appliedWindowSig)) {
+            appliedWindowSig = windowSig;
+            applyWindowSize();
+            measureBackgroundArea();
+            applyBackgroundColor();
+        }
+
+        // 3) 键盘手势与下拉悬停开关
+        String gestureSig = gestureSignature(sp);
+        if (!gestureSig.equals(appliedGestureSig)) {
+            appliedGestureSig = gestureSig;
+            bindKeyGestures();
+            setupPullDownHover();
+        }
+
+        // 4) 影响列表内容的数据：隐藏应用（取消隐藏需重新加载）/ 最近更新范围 / 支付宝快捷方式
+        String dataSig = dataSignature(sp);
+        if (!dataSig.equals(appliedDataSig)) {
+            appliedDataSig = dataSig;
+            refreshAppsFullScanWithCache();
+        }
+
+        // 5) 数字键绑定：重新加载按键图标（点击/长按本身是实时读取绑定的）
+        String keyBindSig = keyBindSignature(sp);
+        if (!keyBindSig.equals(appliedKeyBindSig)) {
+            appliedKeyBindSig = keyBindSig;
+            loadKeyBindingIcons();
+        }
+
+        // 6) 默认打开分类：改了就直接跳过去
+        String defCatSig = sp.getString("default_category", "\u0000");
+        if (!defCatSig.equals(appliedDefaultCatSig)) {
+            appliedDefaultCatSig = defCatSig;
+            applyDefaultCategory();
+        }
     }
 
     // ==================== 分类 Tab 相关 ====================
@@ -1384,12 +1558,14 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         }
     }
 
-    /** 从设置返回后检测分类/循环设置是否变化，有变则重建页适配器与 chips */
+    /** 从设置返回后检测分类配置/循环设置是否变化，有变则重建页适配器与 chips */
     private void rebuildTabsIfChanged() {
         refreshCategoryTabs();
-        loopSwipe = getSharedPreferences("settings", MODE_PRIVATE)
-                .getBoolean("categories_loop", true);
-        String sig = String.join("|", categoryTabs) + "|loop=" + loopSwipe;
+        SharedPreferences sp = getSharedPreferences("settings", MODE_PRIVATE);
+        loopSwipe = sp.getBoolean("categories_loop", true);
+        // 直接比对配置原文：改名/增删/调整顺序/改变归属（成员）都能被检测到
+        String sig = String.join("|", categoryTabs) + "|loop=" + loopSwipe
+                + "|cfg=" + sp.getString("category_config", "");
         if (sig.equals(categoryTabsSignature)) return;
         categoryTabsSignature = sig;
 
@@ -1492,14 +1668,25 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
      * 上滑可恢复正常位置。
      */
     private void setupPullDownHover() {
+        // 先摘掉上一次挂的监听：开关切换/重复调用时不会叠加多个监听
+        if (pullDownHoverTarget != null && pullDownHoverListener != null) {
+            pullDownHoverTarget.removeOnItemTouchListener(pullDownHoverListener);
+        }
+        pullDownHoverTarget = null;
+        pullDownHoverListener = null;
+
+        // 开关关闭时顺带复位已触发的悬停偏移
         boolean enabled = getSharedPreferences("settings", MODE_PRIVATE)
                 .getBoolean("pull_down_hover", true);
-        if (!enabled) return;
+        if (!enabled) {
+            cancelHover();
+            return;
+        }
 
         ViewPager2 vp = viewPager;
         if (vp.getChildAt(0) instanceof RecyclerView) {
             RecyclerView internalRv = (RecyclerView) vp.getChildAt(0);
-            internalRv.addOnItemTouchListener(new RecyclerView.OnItemTouchListener() {
+            RecyclerView.OnItemTouchListener listener = new RecyclerView.OnItemTouchListener() {
                 private float startY = 0;
                 private boolean isTracking = false;
 
@@ -1541,7 +1728,10 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
 
                 @Override
                 public void onRequestDisallowInterceptTouchEvent(boolean disallowIntercept) {}
-            });
+            };
+            internalRv.addOnItemTouchListener(listener);
+            pullDownHoverTarget = internalRv;
+            pullDownHoverListener = listener;
         }
     }
 
@@ -1807,8 +1997,8 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         rebuildTabsIfChanged();
         // 兜底：重建后 Fragment 可能刚被系统还原、缺 adapter 注入（bind 幂等）
         syncLiveFragments();
-        // 从设置页返回即时生效（值未变时内部会直接跳过）
-        applyIconTransparency();
+        // 设置里改过的项（列数/字体/背景/窗口/手势/隐藏应用等）重新应用，无需重启
+        applyChangedSettingsOnResume();
         if (pendingQueryClear) {
             pendingQueryClear = false;
             if (query.length() > 0) {
