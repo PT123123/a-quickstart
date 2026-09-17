@@ -14,11 +14,26 @@ android {
         versionName "2.0.0"
     }
 
+    signingConfigs {
+        release {
+            def ksPassFile = rootProject.file('kp.txt')
+            if (ksPassFile.exists()) {
+                storeFile rootProject.file('kuaishouqi-release.p12')
+                storePassword ksPassFile.text.trim()
+                keyAlias 'kuaishouqi'
+                keyPassword ksPassFile.text.trim()
+            }
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            signingConfig signingConfigs.debug
+            // 刻意不回退 signingConfigs.debug：debug key 换机就失效，是最坑的假象
+            if (rootProject.file('kp.txt').exists()) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 
