@@ -1,5 +1,6 @@
 package com.quickstart.util;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -115,6 +116,55 @@ public class T9MatcherTest {
     public void middleMatch_skipOneSyllable() {
         // 跳过 gao，从 "dedi" 全拼开始
         assertTrue(T9Matcher.matchesEnhanced("deditu", entry("高德地图")));
+    }
+
+    // ========== 多音字 ==========
+
+    @Test
+    public void heteronym_defaultReadingStillMatches() {
+        // TinyPinyin 默认把「壳」读成 qiao，默认读音必须继续能搜到
+        assertTrue(T9Matcher.matchesEnhanced("beiqiao", entry("贝壳找房")));
+        assertTrue(T9Matcher.matchesEnhanced("bqzf", entry("贝壳找房")));
+    }
+
+    @Test
+    public void heteronym_alternateReadingMatches() {
+        // 用户按「ke」的读音搜索：全拼 / 部分拼音 / 首字母 / 数字键（23453 = beike）
+        assertTrue(T9Matcher.matchesEnhanced("beike", entry("贝壳找房")));
+        assertTrue(T9Matcher.matchesEnhanced("beik", entry("贝壳找房")));
+        assertTrue(T9Matcher.matchesEnhanced("bkzf", entry("贝壳找房")));
+        assertTrue(T9Matcher.matchesEnhanced("23453", entry("贝壳找房")));
+    }
+
+    @Test
+    public void heteronym_mixedInputOnAlternateReading() {
+        // 备选读音同样支持混合输入（首字母 + 全拼）：b + ke
+        assertTrue(T9Matcher.matchesEnhanced("bke", entry("贝壳找房")));
+    }
+
+    @Test
+    public void heteronym_commonAppNames() {
+        assertTrue(T9Matcher.matchesEnhanced("chongqing", entry("重庆")));   // 重 默认 zhong
+        assertTrue(T9Matcher.matchesEnhanced("zhongqing", entry("重庆")));
+        assertTrue(T9Matcher.matchesEnhanced("yinhang", entry("银行")));     // 行 默认 xing
+        assertTrue(T9Matcher.matchesEnhanced("yinyue", entry("音乐")));      // 乐 默认 le
+        assertTrue(T9Matcher.matchesEnhanced("pianyi", entry("便宜")));      // 便 默认 bian
+        assertTrue(T9Matcher.matchesEnhanced("shoucang", entry("收藏")));    // 藏 默认 zang
+        assertTrue(T9Matcher.matchesEnhanced("dushi", entry("都市")));       // 都 默认 dou
+    }
+
+    @Test
+    public void heteronym_matchStrength() {
+        // 备选读音是「完全匹配」，输入其前缀算「开头匹配」
+        assertEquals(3, T9Matcher.matchStrength("beike", entry("贝壳")));
+        assertEquals(2, T9Matcher.matchStrength("beik", entry("贝壳")));
+        assertEquals(3, T9Matcher.matchStrength("beiqiao", entry("贝壳")));
+    }
+
+    @Test
+    public void heteronym_noFalsePositive() {
+        assertFalse(T9Matcher.matchesEnhanced("zzzz", entry("贝壳找房")));
+        assertFalse(T9Matcher.matchesEnhanced("yinyue", entry("快乐")));
     }
 
     // ========== 反例 ==========
