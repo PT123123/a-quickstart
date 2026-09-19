@@ -262,6 +262,18 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         // 加载数字键绑定图标
         loadKeyBindingIcons();
 
+        // 内置默认绑定（长按 1=Clash、7=微信、8=Twitter、9=知乎）：首次运行/升级到本版后补一次。
+        // 要查 PackageManager，放后台线程避免影响冷启动；真补上了才重新加载按键图标。
+        io.execute(() -> {
+            if (KeyBindingHelper.applyDefaultBindingsIfNeeded(this)) {
+                main.post(() -> {
+                    appliedKeyBindSig = keyBindSignature(
+                            getSharedPreferences("settings", MODE_PRIVATE));
+                    loadKeyBindingIcons();
+                });
+            }
+        });
+
         // 底部区域上滑展开键盘
         setupBottomSwipeToExpand();
     }
@@ -1328,9 +1340,13 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
 
     /** 窗口与背景签名 */
     private String windowSignature(SharedPreferences sp) {
+        // 重新选图会覆盖同一个 source.jpg，路径不变，必须用文件指纹才能识别内容已更新
+        File src = BackgroundManager.getSourceFile(this);
+        String imageStamp = src.exists() ? (src.length() + "@" + src.lastModified()) : "";
         return sp.getString("window_size", "full")
                 + "|" + sp.getString("background_color", "")
                 + "|" + sp.getString(BackgroundManager.PREF_IMAGE, "")
+                + "|" + imageStamp
                 + "|" + sp.getString(BackgroundManager.PREF_BLUR, BackgroundManager.NONE);
     }
 

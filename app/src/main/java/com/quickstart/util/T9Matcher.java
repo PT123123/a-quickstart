@@ -5,9 +5,12 @@ import com.quickstart.model.AppEntry;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * T9 搜索匹配引擎 - 增强版。
@@ -22,6 +25,7 @@ import java.util.Map;
  * 7. 中英混合分词：bxib → 冰箱IceBox
  * 8. 特殊字符映射：1dm0 → 1DM+（0 代表非字母数字字符）
  * 9. 中间匹配：ditu → 高德地图（跳过起始音节）
+ * 10. 多音字匹配：beike / beiqiao 都能命中「贝壳找房」（每个汉字的所有常见读音都会生成变体）
  *
  * 增强指纹（buildEnhancedPatterns）由 AppLoader 预计算存入 AppEntry.enhancedPatterns，
  * 缓存加载的条目（FastCache）在首次匹配时惰性补算。
@@ -36,6 +40,61 @@ public final class T9Matcher {
     public static final int PAT_MIXED_INITIALS  = 2; // 中英混合首字母："冰箱IceBox" → "bxib"
     public static final int PAT_FULL_PINYIN     = 3; // 全拼（小写、无分隔）："微信" → "weixin"
     public static final int PAT_PINYIN_INITIALS = 4; // 拼音首字母："微信" → "wx"
+    public static final int PAT_ALT_FULL_PINYIN     = 5; // 多音字备选全拼："贝壳找房" → "beikezhaofang"（'\u0001' 分隔多个）
+    public static final int PAT_ALT_PINYIN_INITIALS = 6; // 与上一槽位一一对应的备选拼音首字母："bkzf"
+    /** 槽位总数 */
+    public static final int PAT_COUNT = 7;
+
+    /** 备选读音在单个槽位内的分隔符（控制字符，不会出现在拼音/应用名里） */
+    private static final char ALT_SEP = '\u0001';
+
+    /** 一条应用名最多生成多少个读音变体（多音字组合过多时只取前 N 个） */
+    private static final int MAX_READINGS = 8;
+
+    /**
+     * 多音字表：汉字 → 全部常见读音（小写、无音调，"v" 代表 ü），用 '|' 分隔。
+     *
+     * TinyPinyin 每个汉字只给一个默认读音（如「壳」默认 qiao），
+     * 于是「贝壳找房」只能被 beiqiao 搜到、搜不到 beike。这里补上其余读音，
+     * 生成读音变体时与默认读音一起参与匹配（重复的会自动去掉）。
+     */
+    private static final String HETERONYM_TABLE =
+            "壳:ke|qiao,长:chang|zhang,重:zhong|chong,行:xing|hang,乐:le|yue,大:da|dai,"
+          + "会:hui|kuai,传:chuan|zhuan,便:bian|pian,单:dan|shan,参:can|shen|cen,"
+          + "差:cha|chai|ci,弹:dan|tan,得:de|dei,都:dou|du,更:geng|jing,角:jiao|jue,"
+          + "觉:jue|jiao,卡:ka|qia,落:luo|la,露:lu|lou,率:lv|shuai,弄:nong|long,"
+          + "强:qiang|jiang,圈:quan|juan,色:se|shai,什:shen|shi,似:si|shi,宿:su|xiu,"
+          + "提:ti|di,系:xi|ji,省:sheng|xing,血:xue|xie,折:zhe|she,着:zhe|zhao|zhuo,"
+          + "藏:cang|zang,恶:e|wu,模:mo|mu,择:ze|zhai,扎:zha|za,拾:shi|she,熟:shu|shou,"
+          + "幢:zhuang|chuang,仔:zi|zai,薄:bao|bo,的:de|di,地:de|di,了:le|liao,"
+          + "泊:bo|po,秘:mi|bi,塞:sai|se,屏:ping|bing,陆:lu|liu,绿:lv|lu,朴:pu|piao,"
+          + "曝:pu|bao,亲:qin|qing,识:shi|zhi,说:shuo|shui,遗:yi|wei,还:hai|huan,"
+          + "佛:fo|fu,度:du|duo,巷:xiang|hang,没:mei|mo,么:me|mo,校:xiao|jiao,"
+          + "畜:chu|xu,埋:mai|man,削:xue|xiao,否:fou|pi,脉:mai|mo";
+
+    /** 解析后的多音字表 */
+    private static final Map<Character, String[]> HETERONYMS = parseHeteronyms();
+
+    private static Map<Character, String[]> parseHeteronyms() {
+        Map<Character, String[]> map = new HashMap<>();
+        for (String item : HETERONYM_TABLE.split(",")) {
+            int colon = item.indexOf(':');
+            if (colon != 1) continue; // 只接受「单字:读音」形式
+            map.put(item.charAt(0), item.substring(colon + 1).split("\\|"));
+        }
+        return map;
+    }
+
+    /** 一个读音变体：全拼（仅字母、小写）+ 拼音首字母（每个音节一个字母） */
+    private static final class Reading {
+        final String fullPinyin;
+        final String initials;
+
+        Reading(String fullPinyin, String initials) {
+            this.fullPinyin = fullPinyin;
+            this.initials = initials;
+        }
+    }
 
     /** 字母 → T9 数字映射表（index = letter - 'A'） */
     private static final char[] LETTER_TO_DIGIT = {
@@ -90,11 +149,13 @@ public final class T9Matcher {
         String label = entry.label;
         String lowerQuery = query.toLowerCase();
         List<String> pat = entry.enhancedPatterns;
-        String normalized     = pat.get(PAT_NORMALIZED);
-        String wordInitials   = pat.get(PAT_WORD_INITIALS);
-        String mixedInitials  = pat.get(PAT_MIXED_INITIALS);
-        String fullPinyin     = pat.get(PAT_FULL_PINYIN);
-        String pinyinInitials = pat.get(PAT_PINYIN_INITIALS);
+        String normalized     = patAt(pat, PAT_NORMALIZED);
+        String wordInitials   = patAt(pat, PAT_WORD_INITIALS);
+        String mixedInitials  = patAt(pat, PAT_MIXED_INITIALS);
+        String fullPinyin     = patAt(pat, PAT_FULL_PINYIN);
+        String pinyinInitials = patAt(pat, PAT_PINYIN_INITIALS);
+        String altFull        = patAt(pat, PAT_ALT_FULL_PINYIN);
+        String altInitials    = patAt(pat, PAT_ALT_PINYIN_INITIALS);
 
         // 1. 原始文字精确匹配（包含关系）
         if (label.toLowerCase().contains(lowerQuery)) {
@@ -118,13 +179,19 @@ public final class T9Matcher {
             return true;
         }
 
-        // 5. 拼音前缀匹配（全拼/部分拼音）：weixin → 微信, weixi → 微信
+        // 5. 拼音前缀匹配（全拼/部分拼音）：weixin → 微信；多音字备选读音同样参与，beike → 贝壳找房
         if (!fullPinyin.isEmpty() && fullPinyin.startsWith(lowerQuery)) {
             return true;
         }
+        if (anyAltMatches(altFull, lowerQuery, false)) {
+            return true;
+        }
 
-        // 6. 混合输入匹配（首字母+全拼混合，按音节边界切分）：qidq → T9启动器
+        // 6. 混合输入匹配（首字母+全拼混合，按音节边界切分）：qidq → T9启动器；备选读音同样支持
         if (matchesMixedInput(lowerQuery, fullPinyin, pinyinInitials)) {
+            return true;
+        }
+        if (anyAltMixedInput(altFull, altInitials, lowerQuery)) {
             return true;
         }
 
@@ -156,19 +223,23 @@ public final class T9Matcher {
         if (pat == null) pat = buildEnhancedPatterns(entry.label);
 
         String lowerLabel   = entry.label.toLowerCase();
-        String normalized     = pat.get(PAT_NORMALIZED);
-        String wordInitials   = pat.get(PAT_WORD_INITIALS);
-        String mixedInitials  = pat.get(PAT_MIXED_INITIALS);
-        String fullPinyin     = pat.get(PAT_FULL_PINYIN);
-        String pinyinInitials = pat.get(PAT_PINYIN_INITIALS);
+        String normalized     = patAt(pat, PAT_NORMALIZED);
+        String wordInitials   = patAt(pat, PAT_WORD_INITIALS);
+        String mixedInitials  = patAt(pat, PAT_MIXED_INITIALS);
+        String fullPinyin     = patAt(pat, PAT_FULL_PINYIN);
+        String pinyinInitials = patAt(pat, PAT_PINYIN_INITIALS);
+        String altFull        = patAt(pat, PAT_ALT_FULL_PINYIN);
+        String altInitials    = patAt(pat, PAT_ALT_PINYIN_INITIALS);
 
-        // 完全匹配：整个输入等于应用的某个可搜索表示
+        // 完全匹配：整个输入等于应用的某个可搜索表示（含多音字备选读音）
         if (lowerLabel.equals(lowerQuery)
                 || normalized.equals(lowerQuery)
                 || wordInitials.equals(lowerQuery)
                 || mixedInitials.equals(lowerQuery)
                 || fullPinyin.equals(lowerQuery)
-                || pinyinInitials.equals(lowerQuery)) {
+                || pinyinInitials.equals(lowerQuery)
+                || anyAltMatches(altFull, lowerQuery, true)
+                || anyAltMatches(altInitials, lowerQuery, true)) {
             return 3;
         }
         if (entry.fingerprints != null) {
@@ -183,7 +254,9 @@ public final class T9Matcher {
                 || wordInitials.startsWith(lowerQuery)
                 || mixedInitials.startsWith(lowerQuery)
                 || fullPinyin.startsWith(lowerQuery)
-                || pinyinInitials.startsWith(lowerQuery)) {
+                || pinyinInitials.startsWith(lowerQuery)
+                || anyAltMatches(altFull, lowerQuery, false)
+                || anyAltMatches(altInitials, lowerQuery, false)) {
             return 2;
         }
         if (entry.fingerprints != null) {
@@ -259,25 +332,198 @@ public final class T9Matcher {
         } catch (Throwable ignored) {
             // TinyPinyin 极端情况下可能异常，忽略即可
         }
+
+        // 4) 多音字备选读音的 T9 指纹：beike → 贝壳找房（23453）
+        //    默认读音的指纹上面已经加过，重复的会自动跳过；标签里没有多音字就整体跳过
+        if (hasHeteronym(label)) {
+            for (Reading reading : buildReadings(label)) {
+                String fullDigits = lettersToDigits(reading.fullPinyin);
+                if (!fullDigits.isEmpty() && !result.contains(fullDigits)) result.add(fullDigits);
+                String initDigits = lettersToDigits(reading.initials);
+                if (!initDigits.isEmpty() && !result.contains(initDigits)) result.add(initDigits);
+            }
+        }
         return result;
     }
 
+    /** label 里是否含多音字（不含就不用生成备选读音，省一轮逐字拼音转换） */
+    private static boolean hasHeteronym(String label) {
+        for (int i = 0; i < label.length(); i++) {
+            if (HETERONYMS.containsKey(label.charAt(i))) return true;
+        }
+        return false;
+    }
+
     /**
-     * 为一条应用名预计算增强指纹（固定 5 个槽位，见 PAT_* 常量）。
+     * 为一条应用名预计算增强指纹（固定 PAT_COUNT 个槽位，见 PAT_* 常量）。
      * 由 AppLoader 在加载应用列表时调用一次，存入 AppEntry.enhancedPatterns。
      */
     public static List<String> buildEnhancedPatterns(String label) {
-        List<String> patterns = new ArrayList<>(5);
+        List<String> patterns = new ArrayList<>(PAT_COUNT);
+        for (int i = 0; i < PAT_COUNT; i++) patterns.add("");
         if (label == null || label.isEmpty()) {
-            for (int i = 0; i < 5; i++) patterns.add("");
             return patterns;
         }
-        patterns.add(normalizeSpecialChars(label));      // PAT_NORMALIZED
-        patterns.add(getEnglishWordInitials(label));     // PAT_WORD_INITIALS
-        patterns.add(getMixedInitials(label));           // PAT_MIXED_INITIALS
-        patterns.add(getFullPinyin(label));              // PAT_FULL_PINYIN
-        patterns.add(getPinyinInitials(label));          // PAT_PINYIN_INITIALS
+
+        String fullPinyin = getFullPinyin(label);
+        String pinyinInitials = getPinyinInitials(label);
+
+        patterns.set(PAT_NORMALIZED, normalizeSpecialChars(label));
+        patterns.set(PAT_WORD_INITIALS, getEnglishWordInitials(label));
+        patterns.set(PAT_MIXED_INITIALS, getMixedInitials(label));
+        patterns.set(PAT_FULL_PINYIN, fullPinyin);
+        patterns.set(PAT_PINYIN_INITIALS, pinyinInitials);
+
+        // 多音字备选读音：贝壳找房 → 默认 beiqiaozhaofang/bqzf，额外补 beikezhaofang/bkzf；
+        // 只有全拼和首字母都与默认读音相同的变体才跳过（首字母相同但全拼不同的必须保留，
+        // 如「都市」都=dou/du 首字母都是 d，dushi 仍要能搜到）
+        StringBuilder altFull = new StringBuilder();
+        StringBuilder altInitials = new StringBuilder();
+        if (hasHeteronym(label)) {
+            for (Reading reading : buildReadings(label)) {
+                if (reading.fullPinyin.equals(fullPinyin) && reading.initials.equals(pinyinInitials)) continue;
+                if (reading.fullPinyin.isEmpty() || reading.initials.isEmpty()) continue;
+                if (altFull.length() > 0) {
+                    altFull.append(ALT_SEP);
+                    altInitials.append(ALT_SEP);
+                }
+                altFull.append(reading.fullPinyin);
+                altInitials.append(reading.initials);
+            }
+        }
+        patterns.set(PAT_ALT_FULL_PINYIN, altFull.toString());
+        patterns.set(PAT_ALT_PINYIN_INITIALS, altInitials.toString());
         return patterns;
+    }
+
+    /**
+     * 生成一条应用名的全部读音变体，第 0 个固定是 TinyPinyin 的默认读音。
+     * 只有多音字会产生多个变体（笛卡尔积，上限 MAX_READINGS 个）。
+     *
+     * 单元划分：每个汉字一个单元（可有多读音），连续的非汉字（英文/数字/符号）整体一个单元。
+     */
+    private static List<Reading> buildReadings(String label) {
+        List<Reading> out = new ArrayList<>();
+        if (label == null || label.isEmpty()) return out;
+
+        // 1) 切分单元
+        List<List<String>> units = new ArrayList<>();
+        StringBuilder ascii = new StringBuilder();
+        for (int i = 0; i < label.length(); i++) {
+            char ch = label.charAt(i);
+            if (isChinese(ch)) {
+                if (ascii.length() > 0) {
+                    units.add(Collections.singletonList(ascii.toString()));
+                    ascii.setLength(0);
+                }
+                units.add(syllablesOf(ch));
+            } else {
+                ascii.append(ch);
+            }
+        }
+        if (ascii.length() > 0) units.add(Collections.singletonList(ascii.toString()));
+
+        // 2) 笛卡尔积（默认读音排在最前，超出上限只保留前 MAX_READINGS 个）
+        List<List<String>> combos = new ArrayList<>();
+        combos.add(new ArrayList<String>());
+        for (List<String> options : units) {
+            List<List<String>> next = new ArrayList<>(combos.size() * options.size());
+            for (List<String> combo : combos) {
+                for (String option : options) {
+                    if (next.size() >= MAX_READINGS) break;
+                    List<String> copy = new ArrayList<>(combo);
+                    copy.add(option);
+                    next.add(copy);
+                }
+                if (next.size() >= MAX_READINGS) break;
+            }
+            combos = next;
+            if (combos.isEmpty()) break;
+        }
+
+        // 3) 每个组合拼成全拼 + 首字母，去掉重复读音
+        Set<String> seen = new HashSet<>();
+        for (List<String> combo : combos) {
+            Reading reading = toReading(combo);
+            if (reading.fullPinyin.isEmpty()) continue;
+            if (!seen.add(reading.fullPinyin + ALT_SEP + reading.initials)) continue;
+            out.add(reading);
+        }
+        return out;
+    }
+
+    /** 单个汉字的可选读音（首项为 TinyPinyin 的默认读音，其后是多音字表里的其余读音） */
+    private static List<String> syllablesOf(char ch) {
+        List<String> out = new ArrayList<>(2);
+        try {
+            String def = Pinyin.toPinyin(String.valueOf(ch), "");
+            if (def != null && !def.isEmpty()) {
+                out.add(def.toLowerCase());
+            }
+        } catch (Throwable ignored) {
+        }
+        String[] alternatives = HETERONYMS.get(ch);
+        if (alternatives != null) {
+            for (String alt : alternatives) {
+                if (!alt.isEmpty() && !out.contains(alt)) out.add(alt);
+            }
+        }
+        if (out.isEmpty()) out.add("");
+        return out;
+    }
+
+    /** 音节序列 → 读音变体（全拼只保留字母；首字母取每个音节的首字符） */
+    private static Reading toReading(List<String> syllables) {
+        StringBuilder full = new StringBuilder();
+        StringBuilder initials = new StringBuilder();
+        for (String syllable : syllables) {
+            for (int i = 0; i < syllable.length(); i++) {
+                char ch = Character.toLowerCase(syllable.charAt(i));
+                if (ch >= 'a' && ch <= 'z') full.append(ch);
+            }
+            if (!syllable.isEmpty()) {
+                char first = Character.toLowerCase(syllable.charAt(0));
+                if (first >= 'a' && first <= 'z') initials.append(first);
+            }
+        }
+        return new Reading(full.toString(), initials.toString());
+    }
+
+    /** 安全读取增强槽位（旧条目/异常数据可能缺槽位） */
+    private static String patAt(List<String> pat, int index) {
+        if (pat == null || index < 0 || index >= pat.size()) return "";
+        String value = pat.get(index);
+        return value == null ? "" : value;
+    }
+
+    /** 遍历 '\u0001' 分隔的备选读音串：exact=true 要求完全相等，否则要求前缀匹配 */
+    private static boolean anyAltMatches(String joined, String query, boolean exact) {
+        if (joined == null || joined.isEmpty() || query == null || query.isEmpty()) return false;
+        int from = 0;
+        while (from <= joined.length()) {
+            int sep = joined.indexOf(ALT_SEP, from);
+            String one = sep < 0 ? joined.substring(from) : joined.substring(from, sep);
+            if (!one.isEmpty() && (exact ? one.equals(query) : one.startsWith(query))) return true;
+            if (sep < 0) return false;
+            from = sep + 1;
+        }
+        return false;
+    }
+
+    /** 多音字备选读音的混合输入匹配（全拼槽位与首字母槽位索引一一对应） */
+    private static boolean anyAltMixedInput(String joinedFull, String joinedInitials, String query) {
+        if (joinedFull == null || joinedFull.isEmpty()
+                || joinedInitials == null || joinedInitials.isEmpty()) {
+            return false;
+        }
+        String sep = String.valueOf(ALT_SEP);
+        String[] fulls = joinedFull.split(sep, -1);
+        String[] initials = joinedInitials.split(sep, -1);
+        int n = Math.min(fulls.length, initials.length);
+        for (int i = 0; i < n; i++) {
+            if (matchesMixedInput(query, fulls[i], initials[i])) return true;
+        }
+        return false;
     }
 
     // ==================== 混合输入匹配（音节边界切分） ====================

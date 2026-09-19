@@ -20,9 +20,9 @@ import java.util.List;
  * 快速二进制缓存：将整个应用列表+图标序列化到单个文件。
  * 比 JSON + 独立 PNG 文件快得多（单次读写 vs 数百次）。
  *
- * 文件格式（v2）：
+ * 文件格式（v3）：
  * [magic: 4 bytes "APPL"]
- * [version: 4 bytes int] = 2
+ * [version: 4 bytes int] = 3
  * [sortMode: 4 bytes int] 排序模式枚举（0=智能, 1=字母, 2=安装时间, 3=频率）
  * [count: 4 bytes int]
  * 每条记录：
@@ -57,7 +57,12 @@ public final class FastCache {
 
     private static final String CACHE_FILE = "app_list.cache";
     private static final int MAGIC = 0x4150504C; // "APPL"
-    private static final int VERSION = 2;
+    /**
+     * 缓存版本：必须完全一致才使用缓存。
+     * v3 起 T9 指纹包含多音字备选读音（贝壳找房 → beike/beiqiao 都能搜到），
+     * 旧版本缓存里的指纹缺这些读音，会导致「搜不到」且无法自动修正，因此强制重建一次。
+     */
+    private static final int VERSION = 3;
 
     private FastCache() {}
 
@@ -137,12 +142,11 @@ public final class FastCache {
             if (magic != MAGIC) return null;
 
             int version = dis.readInt();
-            if (version < 1 || version > VERSION) { file.delete(); return null; }
+            // 版本必须完全一致：指纹/字段语义变化时旧缓存必须重建，否则会出现
+            // 「搜得到 / 搜不到」取决于缓存新旧的不一致行为
+            if (version != VERSION) { file.delete(); return null; }
 
-            int sortMode = SORT_UNKNOWN;
-            if (version >= 2) {
-                sortMode = dis.readInt();
-            }
+            int sortMode = dis.readInt();   // v3 起固定存在（版本严格一致）
 
             int count = dis.readInt();
             // 校验数量合理性，防止损坏文件导致 OOM
