@@ -86,6 +86,24 @@ public final class IconCache {
     }
 
     /**
+     * 只写入内存缓存（不落盘）。用于 FastCache 内嵌图标解码结果的回填：
+     * 这些 PNG 本就来自磁盘 icons/ 目录，无需再压缩写回一遍，
+     * 且 preloadAll / IconCache.get 命中内存后即跳过，重复解码随之消除。
+     */
+    public static void putMemory(Context ctx, String pkg, Drawable drawable) {
+        if (drawable == null) return;
+        Bitmap scaled = drawableToScaledBitmap(drawable, TARGET_ICON_SIZE);
+        if (scaled != null) {
+            memoryCache.put(pkg, new BitmapDrawable(ctx.getResources(), scaled));
+        }
+    }
+
+    /** 把任务投递到预加载线程池（8 线程），供 FastCache 内嵌图标并行解码复用 */
+    public static void executePreload(Runnable task) {
+        preloadExecutor.execute(task);
+    }
+
+    /**
      * 批量预加载图标到内存缓存。
      * 在后台线程中从磁盘或 PackageManager 加载所有图标，
      * 全部完成后在同一个后台线程调用 callback.run()（不切回主线程，

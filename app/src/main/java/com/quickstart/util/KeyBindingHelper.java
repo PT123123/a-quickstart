@@ -23,6 +23,11 @@ public final class KeyBindingHelper {
     /** 默认绑定的记账键：key_bind_default_&lt;digit&gt;，true 表示这个键位已经处理过（成功绑定或用户已自行绑定） */
     private static final String DEFAULT_FLAG_PREFIX = "key_bind_default_";
 
+    /** 默认绑定「未安装」的记账键：key_bind_default_miss_&lt;digit&gt;，值为上次确认未安装的时间 */
+    private static final String DEFAULT_MISS_PREFIX = "key_bind_default_miss_";
+    /** 未安装的默认绑定间隔多久重试一次（期间跳过，避免每次冷启动都全量扫 PackageManager） */
+    private static final long DEFAULT_MISS_RETRY_MS = 3L * 24 * 60 * 60 * 1000;
+
     /** 一条默认绑定规则：数字键 + 候选包名 + 应用名关键字（依次找第一个已安装的） */
     private static final class DefaultBinding {
         final int digit;
@@ -118,7 +123,8 @@ public final class KeyBindingHelper {
      *
      * 规则：
      * - 只补「当前没有绑定任何应用」的键位，绝不覆盖用户自己的绑定；
-     * - 该键位的默认应用没安装时保持空位，下次启动再试（只有成功绑定、或用户已自行绑定时才记账）；
+     * - 该键位的默认应用没安装时保持空位，记失败时间后 3 天内不再重试
+     *   （不记账的话，每次冷启动都会全量 queryIntentActivities + 逐应用 loadLabel，拖慢启动）；
      * - 每个键位只补一次（SP 记 key_bind_default_&lt;digit&gt;），用户之后清空绑定也不会被重新填上。
      *
      * 需要在后台线程调用（要查 PackageManager）。
@@ -140,16 +146,25 @@ public final class KeyBindingHelper {
                 continue;
             }
 
+            long now = System.currentTimeMillis();
+            String missKey = DEFAULT_MISS_PREFIX + binding.digit;
+            if (now - sp.getLong(missKey, 0L) < DEFAULT_MISS_RETRY_MS) continue;
+
             String pkg = resolveByPackages(ctx, binding.packages);
             if (pkg == null) {
                 if (launcherApps == null) launcherApps = queryLauncherApps(ctx);
                 pkg = resolveByLabel(ctx, launcherApps, binding.keywords);
             }
-            if (pkg == null) continue; // 未安装：不记账，下次启动再试
+            if (pkg == null) {
+                // 未安装：记失败时间，3 天内的冷启动不再重试（之后安装了应用最迟 3 天自动补上）
+                sp.edit().putLong(missKey, now).apply();
+                continue;
+            }
 
             sp.edit()
                     .putString("key_bind_" + binding.digit, pkg)
                     .putBoolean(flagKey, true)
+                    .remove(missKey)
                     .apply();
             changed = true;
         }

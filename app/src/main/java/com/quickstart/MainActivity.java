@@ -109,6 +109,11 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
     private RecyclerView.OnItemTouchListener pullDownHoverListener;
 
     private final ExecutorService io = Executors.newSingleThreadExecutor();
+    /**
+     * 应用列表冷加载专用线程池：与 io 隔离，FastCache.load 不再排在背景图解码、
+     * 按键图标加载、默认绑定检查之后（清后台后列表首帧由它直接决定）。
+     */
+    private final ExecutorService fastIo = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     /** 主线程 Handler 的弱引用，供静态异步任务使用 */
     private final WeakReference<Handler> mainHandlerRef = new WeakReference<>(main);
@@ -170,11 +175,11 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         }
         updateAccessibilityHint();
 
-        // 键盘默认收缩：不挡背景，点 ⌃ 按钮或底部区域上滑展开
-        keypad.setVisibility(View.GONE);
-        // 与切换按钮的文案约定保持一致（收起态显示 ⌃，展开态显示 ⌄）
+        // 键盘默认展开：T9 搜索是主交互，启动即可输入；点 ⌃ 收起，收起后底部区域上滑可再展开
+        keypad.setVisibility(View.VISIBLE);
+        // 与切换按钮的文案约定保持一致（展开态显示 ⌄，收起态显示 ⌃）
         TextView toggleKeypadInit = findViewById(R.id.btn_toggle_keypad);
-        if (toggleKeypadInit != null) toggleKeypadInit.setText("⌃");
+        if (toggleKeypadInit != null) toggleKeypadInit.setText("⌄");
 
         // 顶部面板（排序栏 + 分类 chips）默认收缩：只留一条半透明拉手，不挡背景
         setTopPanelExpanded(false);
@@ -242,8 +247,8 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
 
         sortLabel.setOnClickListener(v -> showSortMenu());
 
-        // ⚙ 设置按钮
-        findViewById(R.id.btn_settings_top).setOnClickListener(v ->
+        // ⚙ 设置按钮：常驻在底部 T9 输出条左侧，与右侧的无障碍提示对称
+        findViewById(R.id.btn_settings_gear).setOnClickListener(v ->
                 startActivity(new Intent(this, SettingsActivity.class)));
 
         // ⌄ 收缩/展开键盘（在键盘上方）
@@ -1061,12 +1066,17 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                 .show();
     }
 
-    /** 安装时间缓存（避免排序时重复调用 getPackageInfo） */
-    private java.util.Map<String, Long> installTimeCache = new java.util.HashMap<>();
+    /**
+     * 排序三缓存：安装时间 / 启动次数 / 最近启动时间。
+     * 用 ConcurrentHashMap：写入方有后台线程（preloadSortData / applyFastSortData），
+     * 也有主线程（recordLaunch），并发修改普通 HashMap 有损坏风险。
+     * 冷启动丢失的问题由 applyFastSortData（SP + 缓存快照，零 binder）在阶段A前回填解决。
+     */
+    private java.util.Map<String, Long> installTimeCache = new java.util.concurrent.ConcurrentHashMap<>();
     /** 启动次数缓存 */
-    private java.util.Map<String, Integer> launchCountCache = new java.util.HashMap<>();
+    private java.util.Map<String, Integer> launchCountCache = new java.util.concurrent.ConcurrentHashMap<>();
     /** 最近启动时间缓存 */
-    private java.util.Map<String, Long> lastLaunchTimeCache = new java.util.HashMap<>();
+    private java.util.Map<String, Long> lastLaunchTimeCache = new java.util.concurrent.ConcurrentHashMap<>();
 
     /** 预加载排序相关数据到内存缓存（后台线程调用；必须传入待排序的列表，而不是 allApps） */
     private void preloadSortData(List<AppEntry> list) {
@@ -1082,6 +1092,26 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
             } catch (Throwable ignored) {
                 installTimeCache.put(e.packageName, 0L);
             }
+            launchCountCache.put(e.packageName, countSp.getInt(e.packageName, 0));
+            lastLaunchTimeCache.put(e.packageName, timeSp.getLong(e.packageName, 0L));
+        }
+    }
+
+    /**
+     * 冷启动快速回填排序缓存：只读 app_launch_count / app_launch_time 两个 SP，
+     * 安装时间用 FastCache v4 落盘的快照，零 PackageManager binder 调用。
+     * 让「最近使用 / 最近安装 / 智能排序」在阶段A（缓存列表首帧）就是正确内容，
+     * 不必等全量重扫末尾的 preloadSortData。后台线程调用。
+     */
+    private void applyFastSortData(List<AppEntry> list, java.util.Map<String, Long> installTimes) {
+        installTimeCache.clear();
+        launchCountCache.clear();
+        lastLaunchTimeCache.clear();
+        SharedPreferences countSp = getSharedPreferences("app_launch_count", MODE_PRIVATE);
+        SharedPreferences timeSp = getSharedPreferences("app_launch_time", MODE_PRIVATE);
+        for (AppEntry e : list) {
+            Long it = installTimes != null ? installTimes.get(e.packageName) : null;
+            installTimeCache.put(e.packageName, it != null ? it : 0L);
             launchCountCache.put(e.packageName, countSp.getInt(e.packageName, 0));
             lastLaunchTimeCache.put(e.packageName, timeSp.getLong(e.packageName, 0L));
         }
@@ -1160,8 +1190,15 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
 
     /** 获取当前列数（默认 3） */
     private int getColumnCount() {
-        // 优先读取新 key（string），兼容旧 key（int）
-        SharedPreferences sp = getSharedPreferences("settings", MODE_PRIVATE);
+        return readColumnCountPref(this);
+    }
+
+    /**
+     * 读取列数设置：优先新 key（string "columns"，设置页写入），兼容旧 key（int "column_count"）。
+     * 静态方法供 ZoneEditorActivity 等无 Activity 上下文依赖的地方复用，避免各处读键不一致。
+     */
+    public static int readColumnCountPref(android.content.Context ctx) {
+        SharedPreferences sp = ctx.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE);
         if (sp.contains("columns")) {
             return Integer.parseInt(sp.getString("columns", "3"));
         }
@@ -1370,7 +1407,8 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         }
         final List<ZoneStore.Zone> zoneList = zones;
         final float fw = refW, fh = refH;
-        updateAllFragments(f -> f.applyAvoidZones(zoneList, fw, fh));
+        final boolean followScroll = sp.getBoolean("avoid_follow_scroll", false);
+        updateAllFragments(f -> f.applyAvoidZones(zoneList, fw, fh, followScroll));
     }
 
     /** 应用「最近更新圆点」开关 */
@@ -1425,6 +1463,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                 + "|" + sp.getBoolean("recent_app_dot", true)
                 + "|" + sp.getString("list_animation", "off")
                 + "|" + sp.getString("key_gesture", "long_press")
+                + "|" + sp.getBoolean("avoid_follow_scroll", false)
                 + "|" + sp.getString(ZoneStore.PREF_KEY, "");
     }
 
@@ -1914,19 +1953,25 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         animator.start();
     }
 
+    /** 性能打点起点（loadAppsAsync 在 onCreate 主线程调用时记录），logcat 过滤 QuickStartPerf 查看 */
+    private static volatile long perfStartMs;
+    private static final String PERF_TAG = "QuickStartPerf";
+
     /**
      * 启动加载：
-     * 1. 从二进制缓存快速加载（含图标）→ 预加载排序数据 → 排序 → 立即显示
+     * 1. 从二进制缓存快速加载（元数据）→ 排序缓存零 binder 回填 → 立即显示（独立 fastIo，不排在其他启动任务之后）
+     *    内嵌图标随后并行解码，不阻塞首帧
      * 2. 后台扫描最新应用列表 → 排序 → 更新缓存和 UI
      */
     private void loadAppsAsync() {
+        perfStartMs = android.os.SystemClock.elapsedRealtime();
         View loadingOverlay = findViewById(R.id.loading_overlay);
         if (loadingOverlay != null) loadingOverlay.setVisibility(View.VISIBLE);
 
         new LoadAppsTask(this, loadingOverlay, main, () -> {
             main.removeCallbacks(periodicRefresh);
             main.postDelayed(periodicRefresh, REFRESH_INTERVAL_MS);
-        }).executeOn(io);
+        }).executeOn(fastIo);
     }
 
     /**
@@ -1952,7 +1997,8 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                 MainActivity activity = activityRef.get();
                 if (activity == null || activity.isDestroyed()) return;
 
-                // 1. 从二进制缓存快速加载（含图标数据）
+                // 1. 从二进制缓存快速加载（只解析元数据；图标字节随后并行解码）
+                final long tParse = android.os.SystemClock.elapsedRealtime();
                 final com.quickstart.util.FastCache.CacheResult cacheResult =
                         com.quickstart.util.FastCache.load(activity);
 
@@ -1961,7 +2007,14 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                     final int cachedSortMode = cacheResult.sortMode;
                     final int currentSortMode = activity.getCurrentSortModeInt();
 
-                    // 阶段A：立即显示缓存列表（跳过 Intent 回填、排序、过滤，<5ms）
+                    // 排序缓存先回填（SP + v4 安装时间快照，零 binder）：
+                    // 「最近使用 / 最近安装」在阶段A首帧即为正确内容，不再等全量重扫
+                    activity.applyFastSortData(cached, cacheResult.installTimes);
+                    android.util.Log.d(PERF_TAG, "缓存解析+排序回填 +" + (android.os.SystemClock.elapsedRealtime() - perfStartMs)
+                            + "ms（解析 " + (android.os.SystemClock.elapsedRealtime() - tParse) + "ms，"
+                            + cached.size() + " 个应用）");
+
+                    // 阶段A：立即显示缓存列表（跳过 Intent 回填、图标解码、过滤）
                     Handler mainHandler = mainHandlerRef.get();
                     if (mainHandler != null) {
                         mainHandler.post(() -> {
@@ -1971,11 +2024,19 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                             if (a.query.length() > 0) a.onQueryChanged(); else a.doFilter();
                             View overlay = loadingOverlayRef.get();
                             if (overlay != null) overlay.setVisibility(View.GONE);
+                            android.util.Log.d(PERF_TAG, "阶段A 列表首帧 +" + (android.os.SystemClock.elapsedRealtime() - perfStartMs) + "ms");
                         });
                     }
 
-                    // 阶段B：后台补齐（Intent 回填 + 排序模式检查 + 过滤）
-                    // 回填启动 Intent（ PackageManager 调用，约 50-80ms）
+                    // 内嵌图标并行解码（写 IconCache 内存缓存并回填 entry.icon）：
+                    // 图标不阻塞首帧，后续 doFilter 与 Adapter 占位兜底自然带上
+                    FastCache.decodeIconsAsync(activity.getApplicationContext(), cacheResult);
+
+                    // 阶段B：后台补齐（Intent 回填 + 排序模式检查 + 过滤）。
+                    // 注意：cached 已作为 allApps 发布，主线程随时可能在遍历它——
+                    // 排序 / removeIf 这类结构性修改只能动副本 updated，
+                    // 否则会撞 ConcurrentModificationException（真机复现过）。
+                    // 回填启动 Intent（ PackageManager 调用，约 50-80ms；只写字段，不动列表结构）
                     for (AppEntry e : cached) {
                         if (e.launchIntent == null) {
                             try {
@@ -1988,22 +2049,24 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                         }
                     }
 
+                    final List<AppEntry> updated = new ArrayList<>(cached);
                     // 如果排序模式与缓存不一致，需要重新排序（约 30-50ms）
                     if (cachedSortMode != currentSortMode && currentSortMode != com.quickstart.util.FastCache.SORT_UNKNOWN) {
-                        activity.preloadSortData(cached);
-                        activity.sortAllApps(cached);
+                        activity.preloadSortData(updated);
+                        activity.sortAllApps(updated);
                     }
-
                     // 过滤隐藏应用
                     java.util.Set<String> hidden = activity.getHiddenPackages();
-                    cached.removeIf(e -> hidden.contains(e.packageName));
+                    updated.removeIf(e -> hidden.contains(e.packageName));
+
+                    android.util.Log.d(PERF_TAG, "阶段B(Intent回填) +" + (android.os.SystemClock.elapsedRealtime() - perfStartMs) + "ms");
 
                     // 回到主线程更新列表（用户此时已看到列表，这次更新几乎无感知）
                     if (mainHandler != null) {
                         mainHandler.post(() -> {
                             MainActivity a = activityRef.get();
                             if (a == null || a.isDestroyed()) return;
-                            a.allApps = cached;
+                            a.allApps = updated;
                             if (a.query.length() > 0) a.onQueryChanged(); else a.doFilter();
                         });
                     }
@@ -2011,7 +2074,11 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
 
                 // 2. 后台扫描最新应用列表
                 if (activity.isDestroyed()) return;
+                final long tScan = android.os.SystemClock.elapsedRealtime();
                 final List<AppEntry> loaded = AppLoader.loadLaunchableApps(activity);
+                android.util.Log.d(PERF_TAG, "全量重扫 +" + (android.os.SystemClock.elapsedRealtime() - perfStartMs)
+                        + "ms（扫描 " + (android.os.SystemClock.elapsedRealtime() - tScan) + "ms，"
+                        + loaded.size() + " 个应用）");
 
                 // 扫描结果为空属异常：保留缓存/现有列表，别把界面清空
                 if (isScanResultSuspicious(loaded)) {
@@ -2039,8 +2106,9 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                     a.preloadSortData(finalLoaded);
                     a.sortAllApps(finalLoaded);
 
-                    // 写入缓存时记录当前排序模式
-                    FastCache.save(a, finalLoaded, a.getCurrentSortModeInt());
+                    // 写入缓存时记录当前排序模式与安装时间快照（供下次冷启动零 binder 回填）
+                    FastCache.save(a, finalLoaded, a.getCurrentSortModeInt(), a.installTimeCache);
+                    android.util.Log.d(PERF_TAG, "重扫收尾(图标+排序+写缓存) +" + (android.os.SystemClock.elapsedRealtime() - perfStartMs) + "ms");
 
                     java.util.Set<String> hidden2 = a.getHiddenPackages();
                     finalLoaded.removeIf(e -> hidden2.contains(e.packageName));
@@ -2201,7 +2269,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                     a.preloadSortData(finalLoaded);
                     a.sortAllApps(finalLoaded);
 
-                    FastCache.save(a, finalLoaded, a.getCurrentSortModeInt());
+                    FastCache.save(a, finalLoaded, a.getCurrentSortModeInt(), a.installTimeCache);
 
                     java.util.Set<String> hidden = a.getHiddenPackages();
                     finalLoaded.removeIf(e -> hidden.contains(e.packageName));
@@ -2275,5 +2343,6 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         main.removeCallbacks(periodicRefresh);
         ProcessLifecycleOwner.get().getLifecycle().removeObserver(processObserver);
         io.shutdownNow();
+        fastIo.shutdownNow();
     }
 }
