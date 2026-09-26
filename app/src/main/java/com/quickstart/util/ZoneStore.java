@@ -23,8 +23,8 @@ public final class ZoneStore {
 
     public static final String PREF_KEY = "bg_avoid_zones";
 
-    /** 区域数量上限，防止无限添加 */
-    public static final int MAX_ZONES = 12;
+    /** 区域数量上限（防止无限添加；用户约定最多 5 个） */
+    public static final int MAX_ZONES = 5;
 
     /** 单个避让区域 */
     public static final class Zone {

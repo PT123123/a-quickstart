@@ -78,6 +78,22 @@ public class AvoidGridLayoutManager extends RecyclerView.LayoutManager {
         requestLayout();
     }
 
+    /**
+     * 自动避让模式：
+     *  - false（默认，固定模式）：区域锚定在背景（内容坐标），格子映射只算一次，
+     *    滚动后下方的应用会滑入区域的屏幕位置；
+     *  - true（自动模式）：区域锚定在屏幕位置，滚动时实时重算格子映射，
+     *    视口内落在区域下的格子被跳过，图标永远不盖住区域。
+     */
+    public void setZonesFollowScroll(boolean follow) {
+        if (followScroll == follow) return;
+        followScroll = follow;
+        requestLayout();
+    }
+
+    /** 是否开启自动避让（区域跟随屏幕，滚动时实时重排） */
+    private boolean followScroll = false;
+
     /** 内容顶部留白（像素），如主界面顶部拉手高度 */
     public void setTopInsetPx(int px) {
         if (px == topInsetPx) return;
@@ -124,6 +140,14 @@ public class AvoidGridLayoutManager extends RecyclerView.LayoutManager {
         if (scrollY > maxScroll) scrollY = maxScroll;
         if (scrollY < 0) scrollY = 0;
 
+        if (followScroll) {
+            // 自动模式：格子映射依赖 scrollY（避让带固定在屏幕上），滚动值确定后重算一次，
+            // 内容高度随之微调时再 clamp 一次
+            buildFreeCells(itemCount);
+            maxScroll = Math.max(0, contentHeight() - viewportH);
+            if (scrollY > maxScroll) scrollY = maxScroll;
+        }
+
         fill(recycler, state, viewportH);
     }
 
@@ -138,7 +162,12 @@ public class AvoidGridLayoutManager extends RecyclerView.LayoutManager {
         int consumed = target - scrollY;
         if (consumed == 0) return 0;
         scrollY = target;
-        offsetChildrenVertical(-consumed);
+        if (followScroll) {
+            // 自动模式：滚动后映射已变，整体重排（fill 会重新挂载所有可见格子）
+            buildFreeCells(state.getItemCount());
+        } else {
+            offsetChildrenVertical(-consumed);
+        }
         fill(recycler, state, viewportH);
         return consumed;
     }
@@ -163,6 +192,8 @@ public class AvoidGridLayoutManager extends RecyclerView.LayoutManager {
     /**
      * 生成「第 i 个应用 → 第几个格子」的映射：逐行扫描格子，
      * 与避让区域相交的格子跳过，直到排完所有应用。
+     * 自动模式（followScroll）下用格子的视口 y 做命中判定，映射随 scrollY 变化，
+     * 因此每次滚动都要重算；固定模式用内容 y（滚动 0 时的位置），映射只算一次。
      */
     private void buildFreeCells(int itemCount) {
         convertZonesToPx();
@@ -170,10 +201,11 @@ public class AvoidGridLayoutManager extends RecyclerView.LayoutManager {
         int rows = 0;
         while (freeCells.size() < itemCount && rows < MAX_ROWS) {
             int top = topInsetPx + rows * cellH;
+            int hitTop = followScroll ? top - scrollY : top;
             for (int c = 0; c < columnCount && freeCells.size() < itemCount; c++) {
                 int left = c * cellW;
                 int cw = (c == columnCount - 1) ? lastColW : cellW;
-                if (!hitAnyZone(left, top, cw, cellH)) {
+                if (!hitAnyZone(left, hitTop, cw, cellH)) {
                     freeCells.add(rows * columnCount + c);
                 }
             }

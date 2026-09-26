@@ -238,11 +238,13 @@ public class CategoryPageFragment extends Fragment {
     }
 
     /** 重新读取避让区域设置并应用到当前页（设置页调整后返回时调用） */
-    public void applyAvoidZones(List<ZoneStore.Zone> zones, float refW, float refH) {
+    public void applyAvoidZones(List<ZoneStore.Zone> zones, float refW, float refH, boolean followScroll) {
         if (recycler == null) return;
         RecyclerView.LayoutManager lm = recycler.getLayoutManager();
         if (lm instanceof AvoidGridLayoutManager) {
-            ((AvoidGridLayoutManager) lm).applyAvoidZones(zones, refW, refH);
+            AvoidGridLayoutManager glm = (AvoidGridLayoutManager) lm;
+            glm.applyAvoidZones(zones, refW, refH);
+            glm.setZonesFollowScroll(followScroll);
         }
     }
 
@@ -259,6 +261,8 @@ public class CategoryPageFragment extends Fragment {
             refH = dm.heightPixels;
         }
         lm.applyAvoidZones(zones, refW, refH);
+        lm.setZonesFollowScroll(requireContext().getSharedPreferences("settings",
+                android.content.Context.MODE_PRIVATE).getBoolean("avoid_follow_scroll", false));
     }
 
     /** 列表瞬间滚回顶部（回到启动器时调用，保证第一行可见） */

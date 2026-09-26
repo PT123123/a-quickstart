@@ -55,6 +55,12 @@
         android:title="图标避让区域"
         android:summary="在背景图片上用圆形/方形划定区域，应用图标会自动避开（适合人像背景，可随时调整）" />
 
+    <SwitchPreferenceCompat
+        android:key="avoid_follow_scroll"
+        android:title="避让区域跟随滚动"
+        android:summary="开启：区域固定在屏幕位置，滚动列表时图标实时绕开，不会盖住区域。关闭：区域固定在背景上，滚动后下方的应用会滑入区域"
+        android:defaultValue="false" />
+
     <Preference
         android:key="clear_background_image"
         android:title="清除图片背景"

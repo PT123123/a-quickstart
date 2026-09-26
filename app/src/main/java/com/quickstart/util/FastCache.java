@@ -20,9 +20,9 @@ import java.util.List;
  * 快速二进制缓存：将整个应用列表+图标序列化到单个文件。
  * 比 JSON + 独立 PNG 文件快得多（单次读写 vs 数百次）。
  *
- * 文件格式（v3）：
+ * 文件格式（v4）：
  * [magic: 4 bytes "APPL"]
- * [version: 4 bytes int] = 3
+ * [version: 4 bytes int] = 4
  * [sortMode: 4 bytes int] 排序模式枚举（0=智能, 1=字母, 2=安装时间, 3=频率）
  * [count: 4 bytes int]
  * 每条记录：
@@ -31,21 +31,29 @@ import java.util.List;
  *   [actLength: 4 bytes][act bytes UTF-8]
  *   [fpCount: 4 bytes][fpLength: 4 bytes][fp bytes] * fpCount
  *   [recentlyUpdated: 1 byte]
+ *   [firstInstallTime: 8 bytes long]   v4：冷启动回填「最近安装」排序缓存，省去逐应用 getPackageInfo
  *   [hasIcon: 1 byte]
  *   [iconSize: 4 bytes int] (if hasIcon)
- *   [iconBytes: iconSize bytes] (PNG, if hasIcon)
+ *   [iconBytes: iconSize bytes] (PNG, if hasIcon；load 不解码，由调用方并行解码)
  */
 public final class FastCache {
 
-    /** 缓存结果包装：应用列表 + 缓存时的排序模式 */
+    /** 缓存结果包装：应用列表 + 缓存时的排序模式 + 图标原始字节 + 安装时间快照 */
     public static final class CacheResult {
         public final List<AppEntry> apps;
         /** 缓存时使用的排序模式（SORT_* 常量），未知返回 -1 */
         public final int sortMode;
+        /** 与 apps 一一对齐的内嵌图标 PNG 字节（无图标为 null）；解码由调用方并行执行 */
+        public final List<byte[]> iconBytes;
+        /** 包名 → firstInstallTime 快照，供冷启动零 binder 回填排序缓存 */
+        public final java.util.Map<String, Long> installTimes;
 
-        public CacheResult(List<AppEntry> apps, int sortMode) {
+        public CacheResult(List<AppEntry> apps, int sortMode,
+                           List<byte[]> iconBytes, java.util.Map<String, Long> installTimes) {
             this.apps = apps;
             this.sortMode = sortMode;
+            this.iconBytes = iconBytes;
+            this.installTimes = installTimes;
         }
     }
 
@@ -59,20 +67,30 @@ public final class FastCache {
     private static final int MAGIC = 0x4150504C; // "APPL"
     /**
      * 缓存版本：必须完全一致才使用缓存。
-     * v3 起 T9 指纹包含多音字备选读音（贝壳找房 → beike/beiqiao 都能搜到），
-     * 旧版本缓存里的指纹缺这些读音，会导致「搜不到」且无法自动修正，因此强制重建一次。
+     * v3 起 T9 指纹包含多音字备选读音（贝壳找房 → beike/beiqiao 都能搜到）。
+     * v4 起每条记录携带 firstInstallTime，且 load 不再内联解码图标（改由调用方并行解码），
+     * 让阶段A（列表首帧）只等元数据解析。旧版本缓存强制重建一次。
      */
-    private static final int VERSION = 3;
+    private static final int VERSION = 4;
 
     private FastCache() {}
 
     /** 保存应用列表到二进制文件（后台线程调用） */
     public static void save(Context ctx, List<AppEntry> apps) {
-        save(ctx, apps, SORT_SMART);
+        save(ctx, apps, SORT_SMART, null);
     }
 
     /** 保存应用列表到二进制文件，同时记录排序模式（后台线程调用） */
     public static void save(Context ctx, List<AppEntry> apps, int sortMode) {
+        save(ctx, apps, sortMode, null);
+    }
+
+    /**
+     * 保存应用列表到二进制文件，记录排序模式与各应用 firstInstallTime 快照（后台线程调用）。
+     * installTimes 缺失的条目落盘为 0，读取侧按「未知」处理。
+     */
+    public static void save(Context ctx, List<AppEntry> apps, int sortMode,
+                            java.util.Map<String, Long> installTimes) {
         File file = getCacheFile(ctx);
         try (DataOutputStream dos = new DataOutputStream(new FileOutputStream(file))) {
             dos.writeInt(MAGIC);
@@ -109,6 +127,10 @@ public final class FastCache {
 
                 // recentlyUpdated
                 dos.writeByte(e.recentlyUpdated ? 1 : 0);
+
+                // firstInstallTime（v4）
+                Long installTime = installTimes != null ? installTimes.get(e.packageName) : null;
+                dos.writeLong(installTime != null ? installTime : 0L);
 
                 // icon
                 byte[] iconBytes = iconToBytes(e.icon);
@@ -152,6 +174,10 @@ public final class FastCache {
             // 校验数量合理性，防止损坏文件导致 OOM
             if (count <= 0 || count > MAX_APP_COUNT) return null;
             List<AppEntry> out = new ArrayList<>(count);
+            List<byte[]> iconList = new ArrayList<>(count);
+            java.util.Map<String, Long> installTimes = new java.util.HashMap<>();
+            // 同一包名的多条记录（微信/支付宝快捷入口与主入口共用图标）复用同一份字节，避免重复解码
+            java.util.Map<String, byte[]> iconDedup = new java.util.HashMap<>();
 
             for (int i = 0; i < count; i++) {
                 // label
@@ -192,19 +218,26 @@ public final class FastCache {
                 // recentlyUpdated
                 entry.recentlyUpdated = dis.readByte() != 0;
 
-                // icon
+                // firstInstallTime（v4）
+                installTimes.put(pkg, dis.readLong());
+
+                // icon：只读字节不解码（PNG 解码是冷启动大头，交给调用方并行执行）
                 boolean hasIcon = dis.readByte() != 0;
+                byte[] iconData = null;
                 if (hasIcon) {
                     int iconSize = dis.readInt();
                     if (iconSize <= 0 || iconSize > MAX_ICON_SIZE) { file.delete(); return null; }
-                    byte[] iconBytes = new byte[iconSize];
-                    dis.readFully(iconBytes);
-                    entry.icon = bytesToDrawable(ctx, iconBytes);
+                    iconData = new byte[iconSize];
+                    dis.readFully(iconData);
+                    // 同包名（快捷入口与主入口）复用第一份字节，解码去重
+                    byte[] first = iconDedup.putIfAbsent(pkg, iconData);
+                    if (first != null) iconData = first;
                 }
 
                 out.add(entry);
+                iconList.add(iconData);
             }
-            return new CacheResult(out, sortMode);
+            return new CacheResult(out, sortMode, iconList, installTimes);
         } catch (IOException e) {
             file.delete(); // 读取失败删除损坏文件
             return null;
@@ -239,14 +272,31 @@ public final class FastCache {
         }
     }
 
-    private static Drawable bytesToDrawable(Context ctx, byte[] bytes) {
-        if (bytes == null || bytes.length == 0) return null;
-        try {
-            Bitmap bitmap = IconCache.decodeScaled(bytes);
-            if (bitmap == null) return null;
-            return new BitmapDrawable(ctx.getResources(), bitmap);
-        } catch (Throwable e) {
-            return null;
+    /**
+     * 把 load() 返回的内嵌图标字节交给 IconCache 的预加载线程池并行解码（8 线程），
+     * 解完写入 IconCache 内存缓存（磁盘 icons/ 目录本就有同内容文件，不再落盘）并回填 entry.icon。
+     * 供冷启动阶段A之后调用：列表首帧不等任何 PNG 解码，图标随后就位，
+     * 后续 doFilter 与 Adapter 的占位兜底会自然带上图标。需在后台线程调用。
+     */
+    public static void decodeIconsAsync(Context appContext, CacheResult result) {
+        if (result == null || result.iconBytes == null || result.iconBytes.isEmpty()) return;
+        final List<AppEntry> apps = result.apps;
+        final List<byte[]> icons = result.iconBytes;
+        for (int i = 0; i < icons.size(); i++) {
+            final byte[] data = icons.get(i);
+            final AppEntry entry = apps.get(i);
+            if (data == null) continue;
+            IconCache.executePreload(() -> {
+                try {
+                    Bitmap bmp = IconCache.decodeScaled(data);
+                    if (bmp != null) {
+                        Drawable d = new BitmapDrawable(appContext.getResources(), bmp);
+                        IconCache.putMemory(appContext, entry.packageName, d);
+                        if (entry.icon == null) entry.icon = d;
+                    }
+                } catch (Throwable ignored) {
+                }
+            });
         }
     }
 }

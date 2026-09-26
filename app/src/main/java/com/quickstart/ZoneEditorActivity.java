@@ -6,6 +6,8 @@ import android.graphics.Color;
 import android.graphics.DashPathEffect;
 import android.graphics.Matrix;
 import android.graphics.Paint;
+import android.graphics.drawable.Drawable;
+import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -19,7 +21,10 @@ import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 
+import com.quickstart.model.AppEntry;
 import com.quickstart.util.BackgroundManager;
+import com.quickstart.util.FastCache;
+import com.quickstart.util.IconCache;
 import com.quickstart.util.ZoneStore;
 
 import java.io.File;
@@ -41,6 +46,10 @@ import java.util.concurrent.Executors;
  *  - 按住已有区域拖动：移动它；
  *  - 点选区域后：底部滑杆调整大小，「删除所选 / 清空」删除；
  *  - 保存后主界面图标网格自动绕开所有区域。
+ *
+ * 画布上还会铺一层「应用网格预览」（与主界面同源缓存、同隐藏过滤、同排序，
+ * 按主界面同款网格与列数排布），并实时应用避让运算——拖动/缩放区域的瞬间
+ * 图标即时重排，预览里看到的就是保存后主界面的样子。
  */
 public class ZoneEditorActivity extends AppCompatActivity {
 
@@ -93,6 +102,7 @@ public class ZoneEditorActivity extends AppCompatActivity {
 
         findViewById(R.id.zone_canvas_loading).setVisibility(View.VISIBLE);
         loadBackgroundBitmap();
+        loadPreviewApps(w, h);
 
         btnCircle.setOnClickListener(v -> setShape(ZoneStore.Zone.TYPE_CIRCLE));
         btnRect.setOnClickListener(v -> setShape(ZoneStore.Zone.TYPE_RECT));
@@ -148,6 +158,108 @@ public class ZoneEditorActivity extends AppCompatActivity {
                 if (!isDestroyed() && canvas != null) canvas.setBitmap(bmp);
             });
         });
+    }
+
+    /**
+     * 加载应用网格预览：与主界面同源的缓存列表（同隐藏过滤、同排序），
+     * 图标按主界面同款网格铺在背景上、避让区域半透明盖在上面——
+     * 划区域时能直接看到哪些图标和文字会被挪走。
+     * 画布只装得下主界面第一屏，因此只解码前几行应用的图标。
+     */
+    private void loadPreviewApps(int canvasW, int canvasH) {
+        worker.execute(() -> {
+            FastCache.CacheResult res = FastCache.load(this);
+            if (res == null || res.apps.isEmpty()) return;
+
+            // 隐藏过滤（与主界面一致）。拷贝成新列表，保持 res.apps 与 iconBytes 的对齐关系
+            java.util.Set<String> hidden = getSharedPreferences("settings", MODE_PRIVATE)
+                    .getStringSet("hidden_apps", new java.util.HashSet<>());
+            List<AppEntry> shown = new ArrayList<>();
+            for (AppEntry e : res.apps) {
+                if (!hidden.contains(e.packageName)) shown.add(e);
+            }
+            sortPreviewApps(shown, res.installTimes);
+
+            // 与主界面同款网格参数（列数读取逻辑必须与 MainActivity.getColumnCount 一致）
+            int columns = MainActivity.readColumnCountPref(this);
+            float density = getResources().getDisplayMetrics().density;
+            float scale = previewScale(canvasW);
+            float cellW = canvasW / (float) columns;
+            float cellH = cellW * 1.3f;
+            float topInset = 28f * density * scale;
+            // 首屏行数 + 一行余量；画布底部 T9 条占位不计
+            int rows = Math.max(1, (int) ((canvasH - topInset) / cellH)) + 1;
+            int need = Math.min(shown.size(), rows * columns + columns);
+
+            // 只解码需要的图标（串行即可，每张约 1-3ms）
+            java.util.Map<String, byte[]> iconByPkg = new java.util.HashMap<>();
+            for (int i = 0; i < res.apps.size(); i++) {
+                byte[] bytes = res.iconBytes.get(i);
+                if (bytes != null) iconByPkg.putIfAbsent(res.apps.get(i).packageName, bytes);
+            }
+            android.content.Context appCtx = getApplicationContext();
+            for (int i = 0; i < need; i++) {
+                AppEntry e = shown.get(i);
+                byte[] bytes = iconByPkg.get(e.packageName);
+                if (bytes == null) continue;
+                try {
+                    Bitmap bmp = IconCache.decodeScaled(bytes);
+                    if (bmp != null) e.icon = new android.graphics.drawable.BitmapDrawable(appCtx.getResources(), bmp);
+                } catch (Throwable ignored) {
+                }
+            }
+
+            main.post(() -> {
+                if (!isDestroyed() && canvas != null) canvas.setPreviewApps(shown, columns, scale);
+            });
+        });
+    }
+
+    /** 预览相对主界面的缩放：画布宽 / 背景显示区实际宽（缺省退回屏幕宽） */
+    private float previewScale(int canvasW) {
+        SharedPreferences bsp = getSharedPreferences(BackgroundManager.PREFS, MODE_PRIVATE);
+        int areaW = bsp.getInt(BackgroundManager.PREF_AREA_W, 0);
+        float realW = areaW > 0 ? areaW : getResources().getDisplayMetrics().widthPixels;
+        return realW > 0 ? canvasW / (float) realW : 1f;
+    }
+
+    /** 与主界面 sortAllApps 相同的排序语义（数据全部来自 SP + FastCache v4 快照，零 binder） */
+    private void sortPreviewApps(List<AppEntry> list, java.util.Map<String, Long> installTimes) {
+        SharedPreferences sp = getSharedPreferences("settings", MODE_PRIVATE);
+        SharedPreferences countSp = getSharedPreferences("app_launch_count", MODE_PRIVATE);
+        SharedPreferences timeSp = getSharedPreferences("app_launch_time", MODE_PRIVATE);
+        java.util.Map<String, Integer> counts = new java.util.HashMap<>();
+        java.util.Map<String, Long> lasts = new java.util.HashMap<>();
+        for (AppEntry e : list) {
+            counts.put(e.packageName, countSp.getInt(e.packageName, 0));
+            lasts.put(e.packageName, timeSp.getLong(e.packageName, 0L));
+        }
+        String mode = sp.getString("sort_mode", "智能排序");
+        switch (mode) {
+            case "字母顺序":
+                java.util.Collections.sort(list, (a, b) -> a.label.compareToIgnoreCase(b.label));
+                break;
+            case "最近安装":
+                java.util.Collections.sort(list, (a, b) -> Long.compare(
+                        installTimes.getOrDefault(b.packageName, 0L),
+                        installTimes.getOrDefault(a.packageName, 0L)));
+                break;
+            case "使用频率":
+                java.util.Collections.sort(list, (a, b) -> Integer.compare(
+                        counts.getOrDefault(b.packageName, 0),
+                        counts.getOrDefault(a.packageName, 0)));
+                break;
+            default: // 智能排序：启动过的按频率排前，未启动的按字母
+                java.util.Collections.sort(list, (a, b) -> {
+                    int ca = counts.getOrDefault(a.packageName, 0);
+                    int cb = counts.getOrDefault(b.packageName, 0);
+                    if (ca > 0 && cb > 0) return Integer.compare(cb, ca);
+                    if (ca > 0) return -1;
+                    if (cb > 0) return 1;
+                    return a.label.compareToIgnoreCase(b.label);
+                });
+                break;
+        }
     }
 
     private void setShape(int type) {
@@ -208,6 +320,17 @@ public class ZoneEditorActivity extends AppCompatActivity {
         private int selected = -1;
         private int newShape = ZoneStore.Zone.TYPE_CIRCLE;
 
+        /**
+         * 应用网格预览：与主界面同源缓存、同隐藏过滤、同排序的列表，按主界面同款
+         * 网格与列数铺在背景上。绘制时实时应用避让（hitAnyZone 跳格），随区域编辑即时重排。
+         */
+        private final List<AppEntry> previewApps = new ArrayList<>();
+        private int previewColumns = 3;
+        /** 预览相对主界面的缩放（画布宽 / 背景显示区实际宽） */
+        private float previewScale = 1f;
+        private final android.text.TextPaint previewTextPaint =
+                new android.text.TextPaint(Paint.ANTI_ALIAS_FLAG);
+
         private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint selStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -223,7 +346,8 @@ public class ZoneEditorActivity extends AppCompatActivity {
         ZoneCanvas(android.content.Context context) {
             super(context);
             fillPaint.setStyle(Paint.Style.FILL);
-            fillPaint.setColor(0x5FFF5252);
+            // 半透明红：盖在预览图标上仍能看清底下内容
+            fillPaint.setColor(0x30FF5252);
             strokePaint.setStyle(Paint.Style.STROKE);
             strokePaint.setStrokeWidth(2f * getResources().getDisplayMetrics().density);
             strokePaint.setColor(0xFFFF8A80);
@@ -231,8 +355,20 @@ public class ZoneEditorActivity extends AppCompatActivity {
             selStrokePaint.setStrokeWidth(3f * getResources().getDisplayMetrics().density);
             selStrokePaint.setColor(Color.WHITE);
             selStrokePaint.setPathEffect(new DashPathEffect(new float[]{10f, 6f}, 0));
+            previewTextPaint.setTextAlign(Paint.Align.CENTER);
+            previewTextPaint.setColor(0xE6FFFFFF);
+            previewTextPaint.setShadowLayer(3f, 0f, 1f, 0x66000000);
             setFocusable(true);
             setClickable(true);
+        }
+
+        /** 设置网格预览数据（后台线程加载完图标后主线程回调） */
+        void setPreviewApps(List<AppEntry> apps, int columns, float scale) {
+            previewApps.clear();
+            if (apps != null) previewApps.addAll(apps);
+            previewColumns = Math.max(1, columns);
+            previewScale = scale > 0 ? scale : 1f;
+            invalidate();
         }
 
         void setBitmap(Bitmap bmp) {
@@ -319,6 +455,7 @@ public class ZoneEditorActivity extends AppCompatActivity {
             } else {
                 c.drawColor(0xFF262B31);
             }
+            drawPreview(c);
             for (int i = 0; i < zones.size(); i++) {
                 ZoneStore.Zone z = zones.get(i);
                 boolean sel = i == selected;
@@ -333,6 +470,83 @@ public class ZoneEditorActivity extends AppCompatActivity {
                     c.drawRect(l, t, r, b, sel ? selStrokePaint : strokePaint);
                 }
             }
+        }
+
+        /**
+         * 按主界面同款网格铺图标和文字，并实时应用避让：与 AvoidGridLayoutManager.buildFreeCells
+         * 同一套跳格逻辑，随区域编辑（新建/拖动/缩放/删除）即时重排——
+         * 预览里看到的就是保存后主界面将要出现的排布。
+         */
+        private void drawPreview(android.graphics.Canvas c) {
+            if (previewApps.isEmpty() || getWidth() <= 0 || getHeight() <= 0) return;
+            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            float cellW = getWidth() / (float) previewColumns;
+            float cellH = cellW * 1.3f;
+            float iconSize = cellW * 0.65f;
+            float padV = 6f * dm.density * previewScale;      // item_app 纵向内边距
+            float topInset = 28f * dm.density * previewScale; // 主界面顶部拉手让位
+            float textSp;
+            switch (previewColumns) { // 与 AppListAdapter.updateItemSquareSize 一致
+                case 2: textSp = 14f; break;
+                case 4: textSp = 11f; break;
+                case 5: textSp = 10f; break;
+                default: textSp = 12f; break;
+            }
+            float textPx = textSp * dm.scaledDensity * previewScale;
+            previewTextPaint.setTextSize(textPx);
+
+            int appIndex = 0;
+            for (int row = 0; appIndex < previewApps.size(); row++) {
+                float cellTop = topInset + row * cellH;
+                if (cellTop >= getHeight()) break;
+                for (int col = 0; col < previewColumns && appIndex < previewApps.size(); col++) {
+                    float cellLeft = col * cellW;
+                    if (hitAnyZone(cellLeft, cellTop, cellW, cellH)) continue; // 实时避让
+                    drawAppCell(c, previewApps.get(appIndex), cellLeft, cellTop,
+                            cellW, cellH, iconSize, padV, textPx, dm.density);
+                    appIndex++;
+                }
+            }
+        }
+
+        /** 画一个应用格子（图标 + 名称），与 item_app.xml 的排布一致 */
+        private void drawAppCell(android.graphics.Canvas c, AppEntry e,
+                                 float cellLeft, float cellTop,
+                                 float cellW, float cellH, float iconSize,
+                                 float padV, float textPx, float density) {
+            float cx = cellLeft + cellW / 2f;
+            Drawable ic = e.icon;
+            if (ic != null) {
+                int l = Math.round(cx - iconSize / 2f);
+                int t = Math.round(cellTop + padV);
+                ic.setBounds(l, t, Math.round(l + iconSize), Math.round(t + iconSize));
+                ic.draw(c);
+            }
+            if (textPx > 0) {
+                float textTop = cellTop + padV + iconSize + 4f * density * previewScale;
+                CharSequence ell = android.text.TextUtils.ellipsize(e.label, previewTextPaint,
+                        cellW - 8f * density * previewScale, android.text.TextUtils.TruncateAt.END);
+                c.drawText(ell.toString(), cx, textTop + textPx * 0.85f, previewTextPaint);
+            }
+        }
+
+        /** 与 AvoidGridLayoutManager.hitAnyZone 相同的判定：格子与任一避让区域相交即跳过 */
+        private boolean hitAnyZone(float left, float top, float cw, float ch) {
+            for (int i = 0; i < zones.size(); i++) {
+                ZoneStore.Zone z = zones.get(i);
+                if (z.type == ZoneStore.Zone.TYPE_CIRCLE) {
+                    float cx = z.x * getWidth(), cy = z.y * getHeight(), r = z.w * getWidth();
+                    float nx = Math.max(left, Math.min(cx, left + cw));
+                    float ny = Math.max(top, Math.min(cy, top + ch));
+                    float dx = cx - nx, dy = cy - ny;
+                    if (dx * dx + dy * dy <= r * r) return true;
+                } else {
+                    float l = z.x * getWidth(), t = z.y * getHeight();
+                    float rr = l + z.w * getWidth(), bb = t + z.h * getHeight();
+                    if (left + cw > l && left < rr && top + ch > t && top < bb) return true;
+                }
+            }
+            return false;
         }
 
         @Override
