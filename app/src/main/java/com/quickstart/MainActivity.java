@@ -41,8 +41,10 @@ import com.quickstart.util.CategoryConfig;
 import com.quickstart.util.FastCache;
 import com.quickstart.util.IconCache;
 import com.quickstart.util.KeyBindingHelper;
+import com.quickstart.service.AdSkipAccessibilityService;
 import com.quickstart.util.SearchHistory;
 import com.quickstart.util.T9Matcher;
+import com.quickstart.util.ZoneStore;
 
 import java.lang.ref.WeakReference;
 import java.io.File;
@@ -59,7 +61,11 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
     private TextView sortLabel, t9Hint, t9Display, emptyHint;
     private ViewPager2 viewPager;
     private View keypad;
+    private View topPanel;
+    private TextView toggleTop;
     private AppListAdapter adapter;
+    /** 快跳过无障碍服务未开启时显示的提示图标（T9 显示条右缘） */
+    private ImageView accessibilityHint;
 
     private List<AppEntry> allApps = new ArrayList<>();
     private List<AppEntry> filtered = new ArrayList<>();
@@ -154,6 +160,26 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         emptyHint  = findViewById(R.id.empty_hint);
         viewPager  = findViewById(R.id.app_list);
         keypad     = findViewById(R.id.keypad);
+        topPanel   = findViewById(R.id.top_panel);
+        toggleTop  = findViewById(R.id.btn_toggle_top);
+
+        // 快跳过无障碍服务未开启时的低调提示图标（点击前往系统无障碍设置）
+        accessibilityHint = findViewById(R.id.accessibility_hint);
+        if (accessibilityHint != null) {
+            accessibilityHint.setOnClickListener(v -> openAccessibilitySettings());
+        }
+        updateAccessibilityHint();
+
+        // 键盘默认收缩：不挡背景，点 ⌃ 按钮或底部区域上滑展开
+        keypad.setVisibility(View.GONE);
+        // 与切换按钮的文案约定保持一致（收起态显示 ⌃，展开态显示 ⌄）
+        TextView toggleKeypadInit = findViewById(R.id.btn_toggle_keypad);
+        if (toggleKeypadInit != null) toggleKeypadInit.setText("⌃");
+
+        // 顶部面板（排序栏 + 分类 chips）默认收缩：只留一条半透明拉手，不挡背景
+        setTopPanelExpanded(false);
+        toggleTop.setOnClickListener(v ->
+                setTopPanelExpanded(topPanel.getVisibility() != View.VISIBLE));
 
         adapter = new AppListAdapter();
         adapter.setOnAppClickListener(this::launchApp);
@@ -488,6 +514,46 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                     ((TextView) child).setTextColor(color);
                 }
             }
+        }
+    }
+
+    /**
+     * 复位所有按键的按下高亮。长按启动应用、切后台等场景下手指尚未抬起界面就失焦，
+     * ACTION_UP/ACTION_CANCEL 不会再派发，按下时染蓝的背景会一直残留到下次回到启动器，
+     * 因此在 onResume 统一恢复默认背景与文字颜色（与抬起时的恢复逻辑一致）。
+     */
+    private void resetKeypadHighlight() {
+        if (keypad == null) return;
+        int[] keyIds = {R.id.key_1, R.id.key_2, R.id.key_3, R.id.key_4, R.id.key_5,
+                        R.id.key_6, R.id.key_7, R.id.key_8, R.id.key_9, R.id.key_0,
+                        R.id.key_clear, R.id.key_back};
+        for (int id : keyIds) {
+            View key = keypad.findViewById(id);
+            if (key == null) continue;
+            key.setBackgroundResource(R.drawable.bg_t9_key);
+            setKeyTextColor(key, getResources().getColor(R.color.t9_key_text, null));
+        }
+    }
+
+    /**
+     * 快跳过无障碍服务未开启时，在 T9 显示条右缘显示低调提示图标。
+     * 功能总开关关闭视为用户主动停用，不再提示（与设置页该状态项的 dependency 一致）。
+     * onResume 时重新检测，开启后图标自动消失。
+     */
+    private void updateAccessibilityHint() {
+        if (accessibilityHint == null) return;
+        boolean featureOn = getSharedPreferences("settings", MODE_PRIVATE)
+                .getBoolean(AdSkipAccessibilityService.PREF_MASTER_ENABLED, true);
+        boolean serviceOn = AdSkipAccessibilityService.isServiceEnabled(this);
+        accessibilityHint.setVisibility(featureOn && !serviceOn ? View.VISIBLE : View.GONE);
+    }
+
+    /** 前往系统无障碍设置（开启「快跳过」服务） */
+    private void openAccessibilitySettings() {
+        try {
+            startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+        } catch (Throwable t) {
+            Toast.makeText(this, "无法打开系统无障碍设置", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -1210,7 +1276,12 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
             View stripView = findViewById(R.id.bottom_swipe_area);
             int stripH = (stripView != null && stripView.getVisibility() == View.VISIBLE)
                     ? stripView.getHeight() : 0;
-            int maxH = listH + stripH + keypadH;   // 键盘收起后列表能占到的最大高度
+            // 顶部面板展开时也挤占了列表区：一并计入，参考尺寸始终按「全部收缩」的最大状态记录
+            int topPanelH = 0;
+            if (topPanel != null && topPanel.getVisibility() == View.VISIBLE) {
+                topPanelH = topPanel.getHeight();
+            }
+            int maxH = listH + stripH + keypadH + topPanelH;   // 面板/键盘全部收起后列表能占到的最大高度
 
             SharedPreferences sp = getSharedPreferences(BackgroundManager.PREFS, MODE_PRIVATE);
             float ratio = w / (float) maxH;
@@ -1284,6 +1355,24 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         updateAllFragments(f -> f.setColumnCount(columnCount));
     }
 
+    /** 应用图标避让区域设置（设置里调整后返回主界面即时生效） */
+    private void applyAvoidZones() {
+        List<ZoneStore.Zone> zones = ZoneStore.load(this);
+        // 参考尺寸取背景显示区的实测值（缩放基准与编辑器一致），缺省时退回当前背景区尺寸
+        SharedPreferences sp = getSharedPreferences(BackgroundManager.PREFS, MODE_PRIVATE);
+        float refW = sp.getInt(BackgroundManager.PREF_AREA_W, 0);
+        float refH = sp.getInt(BackgroundManager.PREF_AREA_H, 0);
+        if (refW <= 0 || refH <= 0) {
+            View bg = findViewById(R.id.bg_container);
+            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            refW = bg != null && bg.getWidth() > 0 ? bg.getWidth() : dm.widthPixels;
+            refH = bg != null && bg.getHeight() > 0 ? bg.getHeight() : dm.heightPixels;
+        }
+        final List<ZoneStore.Zone> zoneList = zones;
+        final float fw = refW, fh = refH;
+        updateAllFragments(f -> f.applyAvoidZones(zoneList, fw, fh));
+    }
+
     /** 应用「最近更新圆点」开关 */
     private void applyRecentDot() {
         boolean show = getSharedPreferences("settings", MODE_PRIVATE)
@@ -1328,14 +1417,15 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         appliedDefaultCatSig = sp.getString("default_category", "\u0000");
     }
 
-    /** 列表外观签名：列数 / 字体颜色 / 图标透明度 / 最近更新圆点 / 列表动画 / 角标手势 */
+    /** 列表外观签名：列数 / 字体颜色 / 图标透明度 / 最近更新圆点 / 列表动画 / 角标手势 / 避让区域 */
     private String uiSignature(SharedPreferences sp) {
         return getColumnCount()
                 + "|" + sp.getString("font_color", "")
                 + "|" + sp.getInt("icon_transparency", 60)
                 + "|" + sp.getBoolean("recent_app_dot", true)
                 + "|" + sp.getString("list_animation", "off")
-                + "|" + sp.getString("key_gesture", "long_press");
+                + "|" + sp.getString("key_gesture", "long_press")
+                + "|" + sp.getString(ZoneStore.PREF_KEY, "");
     }
 
     /** 窗口与背景签名 */
@@ -1384,7 +1474,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
     private void applyChangedSettingsOnResume() {
         SharedPreferences sp = getSharedPreferences("settings", MODE_PRIVATE);
 
-        // 1) 列表外观：列数 / 字体颜色 / 图标透明度 / 最近更新圆点 / 列表动画 / 角标手势
+        // 1) 列表外观：列数 / 字体颜色 / 图标透明度 / 最近更新圆点 / 列表动画 / 角标手势 / 避让区域
         String uiSig = uiSignature(sp);
         if (!uiSig.equals(appliedUiSig)) {
             appliedUiSig = uiSig;
@@ -1393,6 +1483,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
             applyIconTransparency();
             applyRecentDot();
             applyListAnimationSetting();
+            applyAvoidZones();
             // 角标手势在绑定时缓存，整体重绑才能立即换用新手势
             adapter.invalidateBadgeGesture();
             for (AppListAdapter a : pageAdapters) a.invalidateBadgeGesture();
@@ -1572,6 +1663,22 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                 v.setSelected(selected);
             }
         }
+        updateTopHandleLabel();
+    }
+
+    /** 收起/展开顶部面板（排序栏 + 分类 chips）。收起时只留一条半透明拉手浮在背景上 */
+    private void setTopPanelExpanded(boolean expanded) {
+        if (topPanel == null) return;
+        topPanel.setVisibility(expanded ? View.VISIBLE : View.GONE);
+        updateTopHandleLabel();
+    }
+
+    /** 拉手文案：箭头方向 + 当前分类名，收起状态下也能看出当前在哪一页 */
+    private void updateTopHandleLabel() {
+        if (toggleTop == null) return;
+        boolean expanded = topPanel != null && topPanel.getVisibility() == View.VISIBLE;
+        String name = currentCategory == null ? "全部应用" : currentCategory;
+        toggleTop.setText((expanded ? "⌃ " : "⌄ ") + name);
     }
 
     /** 从设置返回后检测分类配置/循环设置是否变化，有变则重建页适配器与 chips */
@@ -2009,6 +2116,10 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
     @Override
     protected void onResume() {
         super.onResume();
+        // 上次离开时按键可能停在按下高亮态（手指未抬起就切走，UP/CANCEL 不会派发），统一复位
+        resetKeypadHighlight();
+        // 无障碍服务可能在系统设置里刚被开启/关闭，回来后刷新提示图标
+        updateAccessibilityHint();
         // 设置里可能新增/删除/改名了分类，回来后检测并重建
         rebuildTabsIfChanged();
         // 兜底：重建后 Fragment 可能刚被系统还原、缺 adapter 注入（bind 幂等）
@@ -2024,6 +2135,8 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
             }
             // 回到启动器：应用列表滚回顶部（第一行可见），并复位下拉悬停
             resetListToTop();
+            // 回到启动器即恢复「看背景」状态：顶部面板收起（键盘本来就默认收起）
+            setTopPanelExpanded(false);
         }
         // 角标由 Adapter 根据 position 自动显示，无需手动刷新
         // 检查是否从设置页触发了强制刷新

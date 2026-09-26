@@ -34,6 +34,7 @@ import androidx.activity.result.contract.ActivityResultContracts;
 
 import com.quickstart.service.AdSkipAccessibilityService;
 import com.quickstart.util.BackgroundManager;
+import com.quickstart.util.ZoneStore;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -253,14 +254,28 @@ public class SettingsActivity extends AppCompatActivity {
                 });
             }
 
+            // 图标避让区域：在背景图上划定图标避开区域（需先设置图片背景）
+            Preference avoidZones = findPreference("bg_avoid_zones");
+            if (avoidZones != null) {
+                avoidZones.setOnPreferenceClickListener(pref -> {
+                    if (!BackgroundManager.hasSource(requireContext())) {
+                        Toast.makeText(getContext(), "请先在「图片背景」中选择背景图片", Toast.LENGTH_LONG).show();
+                        return true;
+                    }
+                    startActivity(new Intent(requireContext(), ZoneEditorActivity.class));
+                    return true;
+                });
+            }
+
             // 清除图片背景
             Preference clearBgImage = findPreference("clear_background_image");
             if (clearBgImage != null) {
                 clearBgImage.setOnPreferenceClickListener(pref -> {
                     getPreferenceManager().getSharedPreferences()
                             .edit().remove("background_image_path").apply();
-                    // 同时删除原图与所有预生成的模糊图
+                    // 同时删除原图与所有预生成的模糊图，避让区域一并清除
                     BackgroundManager.clearAll(requireContext());
+                    ZoneStore.clear(requireContext());
                     Toast.makeText(getContext(), "已恢复默认背景", Toast.LENGTH_SHORT).show();
                     return true;
                 });
