@@ -51,6 +51,11 @@
         android:entryValues="@array/background_blur_values" />
 
     <Preference
+        android:key="bg_avoid_zones"
+        android:title="图标避让区域"
+        android:summary="在背景图片上用圆形/方形划定区域，应用图标会自动避开（适合人像背景，可随时调整）" />
+
+    <Preference
         android:key="clear_background_image"
         android:title="清除图片背景"
         android:summary="恢复使用纯色背景" />

@@ -88,6 +88,14 @@
             android:label="裁剪图片"
             android:theme="@style/AppTheme" />
 
+        <!-- 图标避让区域编辑（背景图上划定图标避开区域） -->
+        <activity
+            android:name=".ZoneEditorActivity"
+            android:exported="false"
+            android:label="图标避让区域"
+            android:screenOrientation="portrait"
+            android:theme="@style/AppTheme" />
+
         <!-- 快跳过（开屏广告跳过）无障碍服务 -->
         <service
             android:name=".service.AdSkipAccessibilityService"

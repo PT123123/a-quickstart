@@ -8,11 +8,13 @@ import android.view.ViewGroup;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
-import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.quickstart.adapter.AppListAdapter;
 import com.quickstart.model.AppEntry;
+import com.quickstart.util.AvoidGridLayoutManager;
+import com.quickstart.util.BackgroundManager;
+import com.quickstart.util.ZoneStore;
 
 import java.lang.ref.WeakReference;
 import java.util.List;
@@ -191,7 +193,7 @@ public class CategoryPageFragment extends Fragment {
                              @Nullable Bundle savedInstanceState) {
         View root = inflater.inflate(R.layout.item_category_page, container, false);
         recycler = root.findViewById(R.id.page_recycler);
-        recycler.setLayoutManager(new GridLayoutManager(requireContext(), columnCount));
+        recycler.setLayoutManager(buildLayoutManager());
         applyAnimatorToRecycler(pendingAnimatorValue);
         if (adapter != null) {
             recycler.setAdapter(adapter);
@@ -216,11 +218,47 @@ public class CategoryPageFragment extends Fragment {
     private void applyColumnCount() {
         if (recycler == null) return;
         RecyclerView.LayoutManager lm = recycler.getLayoutManager();
-        if (lm instanceof GridLayoutManager) {
-            ((GridLayoutManager) lm).setSpanCount(columnCount);
+        if (lm instanceof AvoidGridLayoutManager) {
+            ((AvoidGridLayoutManager) lm).setColumnCount(columnCount);
         } else {
-            recycler.setLayoutManager(new GridLayoutManager(requireContext(), columnCount));
+            recycler.setLayoutManager(buildLayoutManager());
         }
+    }
+
+    /**
+     * 构建避让式网格布局管理器：
+     *  - 第一行给主界面顶部的收缩/展开拉手让位（半透明浮层，约 28dp）；
+     *  - 避让区域来自设置（ZoneStore），参考尺寸与编辑器一致（背景显示区实测值）。
+     */
+    private AvoidGridLayoutManager buildLayoutManager() {
+        AvoidGridLayoutManager lm = new AvoidGridLayoutManager(requireContext(), columnCount);
+        lm.setTopInsetPx((int) (28 * getResources().getDisplayMetrics().density));
+        loadZonesInto(lm);
+        return lm;
+    }
+
+    /** 重新读取避让区域设置并应用到当前页（设置页调整后返回时调用） */
+    public void applyAvoidZones(List<ZoneStore.Zone> zones, float refW, float refH) {
+        if (recycler == null) return;
+        RecyclerView.LayoutManager lm = recycler.getLayoutManager();
+        if (lm instanceof AvoidGridLayoutManager) {
+            ((AvoidGridLayoutManager) lm).applyAvoidZones(zones, refW, refH);
+        }
+    }
+
+    /** 从设置读取避让区域并应用到指定 LayoutManager（参考尺寸与编辑器一致） */
+    private void loadZonesInto(AvoidGridLayoutManager lm) {
+        android.content.SharedPreferences sp = requireContext()
+                .getSharedPreferences(BackgroundManager.PREFS, android.content.Context.MODE_PRIVATE);
+        List<ZoneStore.Zone> zones = ZoneStore.load(requireContext());
+        float refW = sp.getInt(BackgroundManager.PREF_AREA_W, 0);
+        float refH = sp.getInt(BackgroundManager.PREF_AREA_H, 0);
+        if (refW <= 0 || refH <= 0) {
+            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            refW = dm.widthPixels;
+            refH = dm.heightPixels;
+        }
+        lm.applyAvoidZones(zones, refW, refH);
     }
 
     /** 列表瞬间滚回顶部（回到启动器时调用，保证第一行可见） */
