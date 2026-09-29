@@ -5,7 +5,7 @@
     <SwitchPreferenceCompat
         android:key="ad_skip_enabled"
         android:title="启用快跳过"
-        android:summary="自动跳过开屏广告（关键字 / 控件 / 坐标三种方式）。关闭后即使无障碍服务仍开启，也不会执行任何跳过操作"
+        android:summary="自动跳过开屏广告（关键字 / 控件 / 手势 / 坐标 / 弹窗多种方式）。关闭后即使无障碍服务仍开启，也不会执行任何跳过操作"
         android:defaultValue="true" />
 
     <Preference
@@ -24,7 +24,33 @@
         <Preference
             android:key="ad_skip_keywords_edit"
             android:title="自定义关键字"
-            android:summary="添加或删除自定义跳过关键字（在内置关键字之外追加）"
+            android:summary="添加或删除自定义跳过关键字；以 re: 开头的按正则匹配（如 re:跳过.{0,3}）"
+            android:dependency="ad_skip_enabled" />
+        <Preference
+            android:key="ad_skip_text_excludes_edit"
+            android:title="关键字排除词"
+            android:summary="文本同时含排除词（如「登录」「更新」）时不点击，防止把「跳过登录」「跳过更新」误当广告"
+            android:dependency="ad_skip_enabled" />
+        <SeekBarPreference
+            android:key="ad_skip_max_text_len"
+            android:title="关键字文本长度上限"
+            android:summary="只有文本不超过该长度才命中关键字；长段落/通知里出现「跳过」二字不会误点"
+            android:defaultValue="12"
+            android:max="60"
+            app:min="5"
+            app:showSeekBarValue="true"
+            android:dependency="ad_skip_enabled" />
+        <SwitchPreferenceCompat
+            android:key="ad_skip_visible_only"
+            android:title="仅匹配可见节点"
+            android:summary="只点击当前屏幕上可见的「跳过」控件，滚出屏幕或隐藏的节点不命中"
+            android:defaultValue="true"
+            android:dependency="ad_skip_enabled" />
+        <SwitchPreferenceCompat
+            android:key="ad_skip_countdown_enabled"
+            android:title="倒计时纯数字按钮"
+            android:summary="部分 App 的跳过按钮只显示「5s」「12S」这类倒计时数字，开启后同样点击。可能误点普通计时文字，默认关闭"
+            android:defaultValue="false"
             android:dependency="ad_skip_enabled" />
     </PreferenceCategory>
 
@@ -35,6 +61,23 @@
             android:summary="「跳过」文字与按钮分离时，点击其最近的可点击父控件；同时点击控件 ID 含 skip 的按钮"
             android:defaultValue="true"
             android:dependency="ad_skip_enabled" />
+        <SwitchPreferenceCompat
+            android:key="ad_skip_id_extended"
+            android:title="扩展 ID 特征"
+            android:summary="除含 skip 外，控件 ID 含 jump_over / tiaoguo（拼音）也算命中；含 login / logon 的 ID 一律排除（不自动点「跳过登录」）"
+            android:defaultValue="true"
+            android:dependency="ad_skip_enabled" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:key="ad_skip_gesture_category"
+        android:title="手势兜底（Android 7.0+）">
+        <SwitchPreferenceCompat
+            android:key="ad_skip_gesture_click"
+            android:title="不可点击文字的手势点击"
+            android:summary="「跳过」文字本身未标记为可点击且找不到可点击父控件时，用模拟手势点击该文字的屏幕位置（GKD 的做法，能覆盖更多广告）"
+            android:defaultValue="true"
+            android:dependency="ad_skip_enabled" />
     </PreferenceCategory>
 
     <PreferenceCategory
@@ -43,7 +86,7 @@
         <SwitchPreferenceCompat
             android:key="ad_skip_coordinate_enabled"
             android:title="启用坐标点击"
-            android:summary="前两种方法都没找到按钮时，模拟点击屏幕指定位置（多数 App 的跳过按钮在右上角）。低于 Android 7.0 的系统不支持"
+            android:summary="前面所有方法都没找到按钮时，模拟点击屏幕指定位置（多数 App 的跳过按钮在右上角）。低于 Android 7.0 的系统不支持"
             android:defaultValue="false"
             android:dependency="ad_skip_enabled" />
         <SeekBarPreference
@@ -62,6 +105,21 @@
             android:max="100"
             app:showSeekBarValue="true"
             android:dependency="ad_skip_coordinate_enabled" />
+        <SwitchPreferenceCompat
+            android:key="ad_skip_coord_preview"
+            android:title="显示落点标记"
+            android:summary="坐标兜底触发时在点击位置短暂显示一个圆环，方便确认位置是否准确"
+            android:defaultValue="true"
+            android:dependency="ad_skip_coordinate_enabled" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="方法四 · 弹窗关闭">
+        <SwitchPreferenceCompat
+            android:key="ad_skip_popup_enabled"
+            android:title="关闭广告弹窗"
+            android:summary="开屏后的时间窗内，命中弹窗关闭词（关闭 / × / 以后再说 / 放弃 / 残忍拒绝）时点击。已排除「关闭应用」等危险按钮，但仍可能误点普通弹窗，默认关闭"
+            android:defaultValue="false"
+            android:dependency="ad_skip_enabled" />
     </PreferenceCategory>
 
     <PreferenceCategory android:title="生效范围">
@@ -74,11 +132,86 @@
             android:entryValues="@array/ad_skip_time_values"
             android:dependency="ad_skip_enabled" />
 
+        <ListPreference
+            android:key="ad_skip_app_mode"
+            android:title="应用名单模式"
+            android:summary="控制快跳过对哪些应用生效"
+            android:defaultValue="all"
+            android:entries="@array/ad_skip_app_mode_entries"
+            android:entryValues="@array/ad_skip_app_mode_values"
+            app:useSimpleSummaryProvider="true"
+            android:dependency="ad_skip_enabled" />
+
+        <Preference
+            android:key="ad_skip_app_manage"
+            android:title="应用名单管理"
+            android:summary="勾选名单应用；管理「不再跳过」的永久屏蔽列表（悬浮条点「不再跳过」加入的应用在这里恢复）"
+            android:dependency="ad_skip_enabled" />
+
+        <SwitchPreferenceCompat
+            android:key="ad_skip_keyguard_safe"
+            android:title="锁屏保护"
+            android:summary="锁屏或灭屏状态下不做任何点击，避免误触锁屏界面"
+            android:defaultValue="true"
+            android:dependency="ad_skip_enabled" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="节奏调节（防连环误点）">
+        <SeekBarPreference
+            android:key="ad_skip_scan_interval"
+            android:title="扫描节流（毫秒）"
+            android:summary="界面内容连续变化时，两次全树扫描的最小间隔；0 为不节流。越大越省电，越小响应越快"
+            android:defaultValue="150"
+            android:max="1000"
+            app:min="0"
+            app:showSeekBarValue="true"
+            android:dependency="ad_skip_enabled" />
+        <SeekBarPreference
+            android:key="ad_skip_cooldown"
+            android:title="命中冷却（毫秒）"
+            android:summary="命中一次后的冷却时间，冷却期内不再次点击"
+            android:defaultValue="1200"
+            android:max="5000"
+            app:min="200"
+            app:showSeekBarValue="true"
+            android:dependency="ad_skip_enabled" />
+        <SeekBarPreference
+            android:key="ad_skip_max_clicks"
+            android:title="单次打开最多点击"
+            android:summary="每次打开应用最多自动点击的次数，防止「点击→界面变化→再点击」循环误点"
+            android:defaultValue="4"
+            android:max="10"
+            app:min="1"
+            app:showSeekBarValue="true"
+            android:dependency="ad_skip_enabled" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="反馈">
         <SwitchPreferenceCompat
             android:key="ad_skip_toast_enabled"
             android:title="跳过时显示提示"
-            android:summary="每次跳过成功时在屏幕下方显示蓝色提示气泡（应用名 + 命中方式）。使用无障碍悬浮窗，无需悬浮窗权限"
+            android:summary="每次跳过成功时在屏幕下方显示蓝色提示气泡（应用名 + 命中方式，可撤销/永久屏蔽）。使用无障碍悬浮窗，无需悬浮窗权限"
             android:defaultValue="true"
+            android:dependency="ad_skip_enabled" />
+        <SeekBarPreference
+            android:key="ad_skip_overlay_seconds"
+            android:title="提示显示时长（秒）"
+            android:summary="提示气泡停留的秒数，需要时间点「撤销」可调长"
+            android:defaultValue="4"
+            android:max="10"
+            app:min="1"
+            app:showSeekBarValue="true"
+            android:dependency="ad_skip_enabled" />
+        <SwitchPreferenceCompat
+            android:key="ad_skip_vibrate"
+            android:title="震动反馈"
+            android:summary="跳过成功时轻微震动一下（适合关闭提示气泡、想确认是否生效的用户）"
+            android:defaultValue="false"
+            android:dependency="ad_skip_enabled" />
+        <Preference
+            android:key="ad_skip_stats"
+            android:title="跳过统计与日志"
+            android:summary="查看今日/累计跳过次数、跳过最多的应用和最近跳过日志"
             android:dependency="ad_skip_enabled" />
     </PreferenceCategory>
 </PreferenceScreen>
