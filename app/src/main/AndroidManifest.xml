@@ -52,6 +52,13 @@
             android:label="已隐藏的应用"
             android:theme="@style/AppTheme" />
 
+        <!-- 快跳过应用名单管理 -->
+        <activity
+            android:name=".AdSkipAppsActivity"
+            android:exported="false"
+            android:label="应用名单管理"
+            android:theme="@style/AppTheme" />
+
         <!-- 分类管理 -->
         <activity
             android:name=".CategorySettingsActivity"

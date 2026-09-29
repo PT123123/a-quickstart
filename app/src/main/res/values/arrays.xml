@@ -123,4 +123,15 @@
         <item>15000</item>
         <item>0</item>
     </string-array>
+
+    <string-array name="ad_skip_app_mode_entries">
+        <item>所有应用生效</item>
+        <item>仅名单内的应用生效</item>
+        <item>名单内的应用不生效</item>
+    </string-array>
+    <string-array name="ad_skip_app_mode_values">
+        <item>all</item>
+        <item>white</item>
+        <item>black</item>
+    </string-array>
 </resources>

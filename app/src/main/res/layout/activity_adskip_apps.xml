@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="?android:attr/colorBackground">
+
+    <!-- 顶部说明 -->
+    <TextView
+        android:id="@+id/adskip_apps_hint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="12dp"
+        android:text="勾选的应用进入名单，配合「应用名单模式」生效（所有应用生效时名单不参与判断）。"
+        android:textSize="13sp"
+        android:textColor="#888888" />
+
+    <!-- 搜索框（过滤名单应用） -->
+    <EditText
+        android:id="@+id/adskip_apps_search"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="12dp"
+        android:hint="搜索应用名或包名"
+        android:inputType="text"
+        android:maxLines="1"
+        android:textSize="14sp" />
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/adskip_apps_list"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+</LinearLayout>
