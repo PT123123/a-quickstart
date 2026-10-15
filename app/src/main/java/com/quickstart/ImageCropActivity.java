@@ -250,16 +250,17 @@ public class ImageCropActivity extends AppCompatActivity {
     }
 
     private void saveAndGenerate(Bitmap cropped) {
-        showProgress("正在生成背景与模糊效果…");
+        showProgress("正在保存壁纸…");
         worker.execute(() -> {
             String error = null;
             Bitmap source = cropped;
+            String savedPath = null;
             try {
-                // 1) 写原图（尺寸已在 getCroppedBitmap 里归一化）
-                if (!BackgroundManager.saveJpeg(source, BackgroundManager.getSourceFile(this), 92)) {
-                    throw new IllegalStateException("保存图片失败");
-                }
-                // 2) 旧模糊图作废，重新预生成三档
+                // 1) 存进壁纸库并设为当前壁纸（库里留档，之后可随时切回）
+                String id = BackgroundManager.saveWallpaper(this, source);
+                if (id == null) throw new IllegalStateException("保存图片失败");
+                savedPath = BackgroundManager.getWallpaperFile(this, id).getAbsolutePath();
+                // 2) 新壁纸的模糊图预生成三档
                 BackgroundManager.deleteGenerated(this);
                 BackgroundManager.generateAll(this);
             } catch (Throwable t) {
@@ -269,17 +270,17 @@ public class ImageCropActivity extends AppCompatActivity {
             }
 
             final String err = error;
+            final String path = savedPath;
             main.post(() -> {
                 dismissProgress();
                 if (isFinishing() || isDestroyed()) return;
-                if (err != null) {
+                if (err != null || path == null) {
                     saving = false;
-                    toast("保存失败: " + err);
+                    toast("保存失败: " + (err == null ? "未知错误" : err));
                     return;
                 }
                 Intent data = new Intent();
-                data.putExtra(EXTRA_OUTPUT_PATH,
-                        BackgroundManager.getSourceFile(this).getAbsolutePath());
+                data.putExtra(EXTRA_OUTPUT_PATH, path);
                 setResult(RESULT_OK, data);
                 finish();
             });

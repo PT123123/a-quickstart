@@ -3,6 +3,7 @@ package com.quickstart;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.net.Uri;
@@ -13,6 +14,7 @@ import android.provider.Settings;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -39,7 +41,9 @@ import com.quickstart.util.AppLoader;
 import com.quickstart.util.BackgroundManager;
 import com.quickstart.util.CategoryConfig;
 import com.quickstart.util.FastCache;
+import com.quickstart.util.GridMetrics;
 import com.quickstart.util.IconCache;
+import com.quickstart.util.IconLayers;
 import com.quickstart.util.KeyBindingHelper;
 import com.quickstart.service.AdSkipAccessibilityService;
 import com.quickstart.util.SearchHistory;
@@ -57,6 +61,14 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
 
     /** 日志 tag：只在异常/兜底路径上打，不刷日志 */
     private static final String TAG = "KSQ";
+
+    // ===== T9 键盘高度设置 =====
+    /** 未设置时的按键高度（dp），与 activity_main.xml 里写死的 60dp 保持一致 */
+    private static final int DEFAULT_KEYPAD_HEIGHT_DP = 60;
+    private static final int MIN_KEYPAD_HEIGHT_DP = 36;
+    private static final int MAX_KEYPAD_HEIGHT_DP = 100;
+    /** 键内绑定应用小图标的原始边长（dp），activity_main.xml 中为 20dp */
+    private static final float BASE_BIND_ICON_DP = 20f;
 
     private TextView sortLabel, t9Hint, t9Display, emptyHint;
     private ViewPager2 viewPager;
@@ -155,6 +167,9 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
             pendingQueryClear = savedInstanceState.getBoolean("pending_query_clear", false);
         }
         setContentView(R.layout.activity_main);
+        // 必须在任何图标加载/读缓存之前设置：外观模式决定图标渲染路径，
+        // 晚设会让先读到的缓存是旧模式的图
+        applyIconLayerMode();
         applyWindowSize();
         applyBackgroundColor();
         measureBackgroundArea();
@@ -191,7 +206,9 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         adapter.setOnAppLongClickListener(this::showAppMenu);
 
         int columnCount = getColumnCount();
+        int cellScale = readCellScale();
         adapter.setColumnCount(columnCount);
+        adapter.setCellScale(cellScale);
 
         // 初始化每页的 Adapter（与 Fragment 一一对应）
         refreshCategoryTabs();
@@ -200,6 +217,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
             pageAdapter.setOnAppClickListener(this::launchApp);
             pageAdapter.setOnAppLongClickListener(this::showAppMenu);
             pageAdapter.setColumnCount(columnCount);
+            pageAdapter.setCellScale(cellScale);
             pageAdapters.add(pageAdapter);
         }
 
@@ -267,6 +285,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         ProcessLifecycleOwner.get().getLifecycle().addObserver(processObserver);
 
         setupKeypad();
+        applyKeypadHeight();
         setupPullDownHover();
         loadAppsAsync();
 
@@ -529,15 +548,116 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
      */
     private void resetKeypadHighlight() {
         if (keypad == null) return;
-        int[] keyIds = {R.id.key_1, R.id.key_2, R.id.key_3, R.id.key_4, R.id.key_5,
-                        R.id.key_6, R.id.key_7, R.id.key_8, R.id.key_9, R.id.key_0,
-                        R.id.key_clear, R.id.key_back};
-        for (int id : keyIds) {
+        for (int id : keypadKeyIds()) {
             View key = keypad.findViewById(id);
             if (key == null) continue;
             key.setBackgroundResource(R.drawable.bg_t9_key);
             setKeyTextColor(key, getResources().getColor(R.color.t9_key_text, null));
         }
+    }
+
+    /** 12 个按键的 id，供高度缩放与高亮复位共用，避免两处各写一份漏键 */
+    private static int[] keypadKeyIds() {
+        return new int[]{R.id.key_1, R.id.key_2, R.id.key_3, R.id.key_4, R.id.key_5,
+                R.id.key_6, R.id.key_7, R.id.key_8, R.id.key_9, R.id.key_0,
+                R.id.key_clear, R.id.key_back};
+    }
+
+    /** 读取 T9 键盘按键高度设置（dp，默认 60，与 activity_main.xml 的原始值一致） */
+    private int readKeypadHeightDp() {
+        int dp = getSharedPreferences("settings", MODE_PRIVATE)
+                .getInt("keypad_height", DEFAULT_KEYPAD_HEIGHT_DP);
+        return Math.max(MIN_KEYPAD_HEIGHT_DP, Math.min(MAX_KEYPAD_HEIGHT_DP, dp));
+    }
+
+    /**
+     * 应用 T9 键盘高度设置：改每个按键的高度，并按同一比例缩放键内字号与
+     * 右下角的绑定应用小图标。
+     *
+     * 为什么不只改高度：按键内的数字是 22sp、字母 10sp，都是固定值，
+     * 键压到 36dp 时 22sp 数字会溢出按键被裁，键拉到 100dp 时字又显得过小。
+     * 同比缩放才始终协调。
+     */
+    private void applyKeypadHeight() {
+        if (keypad == null) return;
+        int heightDp = readKeypadHeightDp();
+        float density = getResources().getDisplayMetrics().density;
+        int heightPx = Math.round(heightDp * density);
+        float ratio = heightDp / (float) DEFAULT_KEYPAD_HEIGHT_DP;
+
+        for (int id : keypadKeyIds()) {
+            View key = keypad.findViewById(id);
+            if (key == null) continue;
+            ViewGroup.LayoutParams lp = key.getLayoutParams();
+            if (lp != null && lp.height != heightPx) {
+                lp.height = heightPx;
+                key.setLayoutParams(lp);
+            }
+            scaleKeypadContent(key, ratio, density);
+        }
+        // 键高变了，列表区最大高度随之变化：背景层尺寸要按新高度重新实测，
+        // 否则键盘收起时背景会被拉伸
+        measureBackgroundArea();
+    }
+
+    /**
+     * 按比例缩放按键内部内容：22sp 数字、10sp 字母、20sp 功能键符号、20dp 绑定图标。
+     * 直接在当前值上累乘会漂移（每应用一次就再乘一次），所以用记录的原始值 × 比例。
+     */
+    private void scaleKeypadContent(View key, float ratio, float density) {
+        if (!(key instanceof ViewGroup)) return;
+        ViewGroup group = (ViewGroup) key;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View child = group.getChildAt(i);
+            if (child instanceof TextView) {
+                TextView tv = (TextView) child;
+                float base = baseTextSizeSp(tv);
+                if (base > 0) {
+                    tv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, base * ratio);
+                }
+            } else if (child instanceof ImageView) {
+                ImageView iv = (ImageView) child;
+                ViewGroup.LayoutParams lp = iv.getLayoutParams();
+                int base = baseBindIconPx(iv, density);
+                if (base > 0 && lp != null) {
+                    lp.width = Math.max(1, Math.round(base * ratio));
+                    lp.height = Math.max(1, Math.round(base * ratio));
+                    iv.setLayoutParams(lp);
+                }
+            } else if (child instanceof ViewGroup) {
+                scaleKeypadContent(child, ratio, density);
+            }
+        }
+    }
+
+    /**
+     * 取 TextView 的原始字号（sp）。
+     * 不能直接读当前值再乘比例——设置反复应用会让字号指数级缩小，
+     * 所以第一次读到时把原始值记在 tag 上，之后都以原始值为基准。
+     */
+    private float baseTextSizeSp(TextView tv) {
+        Object tag = tv.getTag(R.id.tag_key_base_text_size);
+        if (tag instanceof Float) return (Float) tag;
+        // 当前值可能被之前的应用改过，用已知的标准字号表反推基准值更稳
+        float current = tv.getTextSize() / getResources().getDisplayMetrics().scaledDensity;
+        float base;
+        if (Math.abs(current - 20f) < 1.5f) base = 20f;        // ✕ / ⌫ 功能键
+        else if (Math.abs(current - 22f) < 1.5f) base = 22f;   // 数字
+        else if (Math.abs(current - 10f) < 1.5f) base = 10f;   // 字母
+        else base = current;
+        tv.setTag(R.id.tag_key_base_text_size, base);
+        return base;
+    }
+
+    /** 取绑定应用小图标的原始边长（px），同样用 tag 记住基准值避免累乘 */
+    private int baseBindIconPx(ImageView iv, float density) {
+        Object tag = iv.getTag(R.id.tag_key_base_icon_size);
+        if (tag instanceof Integer) return (Integer) tag;
+        ViewGroup.LayoutParams lp = iv.getLayoutParams();
+        int base = lp != null && lp.width > 0
+                ? lp.width : Math.round(BASE_BIND_ICON_DP * density);
+        iv.setTag(R.id.tag_key_base_icon_size, base);
+        return base;
     }
 
     /**
@@ -1193,6 +1313,11 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         return readColumnCountPref(this);
     }
 
+    /** 获取当前格子缩放百分比（默认 100 = 原始大小） */
+    private int readCellScale() {
+        return GridMetrics.readCellScale(this);
+    }
+
     /**
      * 读取列数设置：优先新 key（string "columns"，设置页写入），兼容旧 key（int "column_count"）。
      * 静态方法供 ZoneEditorActivity 等无 Activity 上下文依赖的地方复用，避免各处读键不一致。
@@ -1205,11 +1330,21 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         return sp.getInt("column_count", 3);
     }
 
+    /** 本应用是否为当前默认主屏幕（桌面启动器） */
+    public static boolean isDefaultHome(android.content.Context ctx) {
+        Intent home = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
+        ResolveInfo ri = ctx.getPackageManager()
+                .resolveActivity(home, PackageManager.MATCH_DEFAULT_ONLY);
+        return ri != null && ri.activityInfo != null
+                && ctx.getPackageName().equals(ri.activityInfo.packageName);
+    }
+
     /** 应用窗口大小设置（改回 full 也立即恢复全屏，无需重启） */
     private void applyWindowSize() {
         String size = getSharedPreferences("settings", MODE_PRIVATE)
                 .getString("window_size", "full");
-        if ("full".equals(size)) {
+        // 桌面模式：作为主屏幕时必须铺满，否则小/中窗口会在桌面上留一块空档
+        if ("full".equals(size) || isDefaultHome(this)) {
             getWindow().setLayout(WindowManager.LayoutParams.MATCH_PARENT,
                     WindowManager.LayoutParams.MATCH_PARENT);
             getWindow().setGravity(android.view.Gravity.TOP);
@@ -1369,6 +1504,22 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
     }
 
     /**
+     * 图标底色模式（透明底）。
+     *
+     * 这里只设值**不做刷新**：外观是烘焙进图标缓存 PNG 的，
+     * 改模式必须清缓存 + 全量重扫，由设置页写 force_refresh_pending 触发，
+     * 否则「改完设置返回列表没变化」会被误当成 bug。
+     */
+    private void applyIconLayerMode() {
+        // 默认透明底（只取前景层）：用户要的就是「去掉底色」这个效果。
+        // SP 里没这个键时用默认值，而不是靠 ListPreference 的 defaultValue ——
+        // 那只在 Preference 框架首次实例化时写入，代码侧读不到就会退回原样。
+        String mode = getSharedPreferences("settings", MODE_PRIVATE)
+                .getString("icon_layer_mode", IconLayers.MODE_FOREGROUND);
+        IconCache.setLayerMode(mode);
+    }
+
+    /**
      * 应用图标透明度设置。
      * SP 里存的是「透明度百分比」0-100：0 = 完全不透明（alpha 1.0），100 = 完全透明，默认 60。
      */
@@ -1390,6 +1541,17 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         adapter.setColumnCount(columnCount);
         for (AppListAdapter a : pageAdapters) a.setColumnCount(columnCount);
         updateAllFragments(f -> f.setColumnCount(columnCount));
+    }
+
+    /**
+     * 应用格子缩放设置（图标与格子同比放大/缩小，改变即时生效）。
+     * 缩放变了避让区域的命中格子也会变，必须让 Fragment 的 LayoutManager 一起更新。
+     */
+    private void applyCellScale() {
+        int cellScale = readCellScale();
+        adapter.setCellScale(cellScale);
+        for (AppListAdapter a : pageAdapters) a.setCellScale(cellScale);
+        updateAllFragments(f -> f.setCellScale(cellScale));
     }
 
     /** 应用图标避让区域设置（设置里调整后返回主界面即时生效） */
@@ -1455,28 +1617,44 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         appliedDefaultCatSig = sp.getString("default_category", "\u0000");
     }
 
-    /** 列表外观签名：列数 / 字体颜色 / 图标透明度 / 最近更新圆点 / 列表动画 / 角标手势 / 避让区域 */
+    /** 列表外观签名：列数 / 格子缩放 / 字体颜色 / 图标透明度 / 最近更新圆点 / 列表动画 / 角标手势 / 避让区域 */
     private String uiSignature(SharedPreferences sp) {
         return getColumnCount()
+                + "|" + readCellScale()
                 + "|" + sp.getString("font_color", "")
                 + "|" + sp.getInt("icon_transparency", 60)
                 + "|" + sp.getBoolean("recent_app_dot", true)
                 + "|" + sp.getString("list_animation", "off")
                 + "|" + sp.getString("key_gesture", "long_press")
                 + "|" + sp.getBoolean("avoid_follow_scroll", false)
-                + "|" + sp.getString(ZoneStore.PREF_KEY, "");
+                // 避让区域按壁纸分键，换壁纸后要读新壁纸自己的那份
+                + "|" + sp.getString(ZoneStore.prefKey(this), "");
     }
 
     /** 窗口与背景签名 */
     private String windowSignature(SharedPreferences sp) {
-        // 重新选图会覆盖同一个 source.jpg，路径不变，必须用文件指纹才能识别内容已更新
-        File src = BackgroundManager.getSourceFile(this);
-        String imageStamp = src.exists() ? (src.length() + "@" + src.lastModified()) : "";
+        // 换壁纸会改 bg_wallpaper_id；同一张壁纸重选（同id）时路径不变，
+        // 还要用文件指纹才能识别内容已更新
+        String id = BackgroundManager.getCurrentId(this);
+        File src = id.isEmpty() ? null : BackgroundManager.getWallpaperFile(this, id);
+        String imageStamp = (src != null && src.exists()) ? (src.length() + "@" + src.lastModified()) : "";
+        String mode = sp.getString(BackgroundManager.PREF_BLUR, BackgroundManager.NONE);
+        // 切壁纸时旧模糊图先作废、后台再补生成，光看原图指纹发现不了「模糊图已就绪」，
+        // 主界面会一直停在无模糊那张。把当前档位模糊图的存在与指纹也算进签名。
+        File blur = BackgroundManager.NONE.equals(mode)
+                ? null : BackgroundManager.getBlurredFile(this, mode);
+        String blurStamp = (blur != null && blur.exists()) ? (blur.length() + "@" + blur.lastModified()) : "";
         return sp.getString("window_size", "full")
                 + "|" + sp.getString("background_color", "")
+                + "|" + id
                 + "|" + sp.getString(BackgroundManager.PREF_IMAGE, "")
                 + "|" + imageStamp
-                + "|" + sp.getString(BackgroundManager.PREF_BLUR, BackgroundManager.NONE);
+                + "|" + mode
+                + "|" + blurStamp
+                // 键盘高度属于「占用多少屏幕空间」，与窗口尺寸同一组：变了要重测背景区
+                + "|" + readKeypadHeightDp()
+                // 是否被设为默认桌面也决定全屏与否，切换桌面后返回要重新应用窗口
+                + "|" + isDefaultHome(this);
     }
 
     /** 手势签名：数字键上滑距离 / 长按时长 / 下拉悬停开关 */
@@ -1513,11 +1691,12 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
     private void applyChangedSettingsOnResume() {
         SharedPreferences sp = getSharedPreferences("settings", MODE_PRIVATE);
 
-        // 1) 列表外观：列数 / 字体颜色 / 图标透明度 / 最近更新圆点 / 列表动画 / 角标手势 / 避让区域
+        // 1) 列表外观：列数 / 格子缩放 / 字体颜色 / 图标透明度 / 最近更新圆点 / 列表动画 / 角标手势 / 避让区域
         String uiSig = uiSignature(sp);
         if (!uiSig.equals(appliedUiSig)) {
             appliedUiSig = uiSig;
             applyColumnCount();
+            applyCellScale();
             applyFontColor();
             applyIconTransparency();
             applyRecentDot();
@@ -1533,7 +1712,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         if (!windowSig.equals(appliedWindowSig)) {
             appliedWindowSig = windowSig;
             applyWindowSize();
-            measureBackgroundArea();
+            applyKeypadHeight(); // 内部已重测背景区
             applyBackgroundColor();
         }
 
@@ -1734,11 +1913,13 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         // 重建每页 Adapter
         pageAdapters.clear();
         int columnCount = getColumnCount();
+        int cellScale = readCellScale();
         for (int i = 0; i < getPageCount(); i++) {
             AppListAdapter a = new AppListAdapter();
             a.setOnAppClickListener(this::launchApp);
             a.setOnAppLongClickListener(this::showAppMenu);
             a.setColumnCount(columnCount);
+            a.setCellScale(cellScale);
             a.setShowRecentDot(getSharedPreferences("settings", MODE_PRIVATE)
                     .getBoolean("recent_app_dot", true));
             pageAdapters.add(a);
@@ -1810,6 +1991,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
             f.setAdapter(pageAdapters.get(p));
             // 应用当前设置
             f.setColumnCount(getColumnCount());
+            f.setCellScale(readCellScale());
             f.setShowRecentDot(getSharedPreferences("settings", MODE_PRIVATE)
                     .getBoolean("recent_app_dot", true));
             f.applyListAnimation(listAnimationValue);
@@ -2175,6 +2357,21 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         pendingQueryClear = true;
     }
 
+    /**
+     * 桌面模式下返回键不退出：作为主屏幕时若 finish 掉会露出空白桌面。
+     * 改为逐步「回到初始视图」——先清空输入，再收起顶部面板，最后列表滚回顶部。
+     */
+    @Override
+    public void onBackPressed() {
+        if (isDefaultHome(this)) {
+            if (query.length() > 0) clearQuery();
+            setTopPanelExpanded(false);
+            scrollAllPagesToTop();
+            return;
+        }
+        super.onBackPressed();
+    }
+
     @Override
     protected void onSaveInstanceState(@NonNull Bundle outState) {
         super.onSaveInstanceState(outState);
@@ -2207,8 +2404,11 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
             setTopPanelExpanded(false);
         }
         // 角标由 Adapter 根据 position 自动显示，无需手动刷新
+        // 图标渲染算法版本变了（如缩放 bug 修复）：缓存里是旧算法渲染的 PNG，
+        // 必须清缓存重建，否则用户升级后看到的还是旧样子
+        boolean renderChanged = IconCache.syncRenderVersion(this);
         // 检查是否从设置页触发了强制刷新
-        boolean forceRefresh = getSharedPreferences("settings", MODE_PRIVATE)
+        boolean forceRefresh = renderChanged || getSharedPreferences("settings", MODE_PRIVATE)
                 .getBoolean("force_refresh_pending", false);
         if (forceRefresh) {
             getSharedPreferences("settings", MODE_PRIVATE).edit()
@@ -2309,6 +2509,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         final AppListAdapter pageAdapter = pageAdapters.get(idx);
         f.bind(pageAdapter, this);
         f.setColumnCount(getColumnCount());
+        f.setCellScale(readCellScale());
         f.setShowRecentDot(getSharedPreferences("settings", MODE_PRIVATE)
                 .getBoolean("recent_app_dot", true));
         f.applyListAnimation(listAnimationValue);

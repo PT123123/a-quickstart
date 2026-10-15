@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自适应图标的单色层（Android 13+ 主题图标用）。系统会按当前主题重着色，
+  所以这里只需要保留 alpha 形状，颜色无关紧要。
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:drawable="@drawable/ic_launcher_logo"
+        android:left="15dp"
+        android:top="15dp"
+        android:right="15dp"
+        android:bottom="15dp" />
+</layer-list>

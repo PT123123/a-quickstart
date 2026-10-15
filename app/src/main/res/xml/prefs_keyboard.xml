@@ -2,6 +2,16 @@
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
 
+    <SeekBarPreference
+        android:key="keypad_height"
+        android:title="T9 键盘高度"
+        android:summary="调整每个按键的高度（数字与字母字号同步缩放），默认 60"
+        android:defaultValue="60"
+        android:max="100"
+        app:min="36"
+        app:showSeekBarValue="true"
+        app:seekBarIncrement="2" />
+
     <ListPreference
         android:key="list_animation"
         android:title="列表动画"

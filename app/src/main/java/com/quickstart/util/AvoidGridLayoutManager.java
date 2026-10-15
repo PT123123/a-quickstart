@@ -23,19 +23,23 @@ import java.util.List;
  *    存于 BackgroundManager.PREF_AREA_W/H），在此处换算为内容坐标像素后做命中判断。
  *
  * 实现说明：
- *  - 每格高度固定为 cellW * 1.3，与 AppListAdapter.updateItemSquareSize 的尺寸公式一致；
- *  - 只把视口内的子 View 挂上去（滚动时 scrap 复用，不做预布局动画，
+ *  - 每格高度由 {@link GridMetrics#cellHeightPx} 统一算出，必须与
+ *    AppListAdapter.updateItemSquareSize 用同一份公式，否则 item 会被 EXACTLY 测量裁掉内容；
+ *  - 只把视口内的子 View挂上去（滚动时 scrap 复用，不做预布局动画，
  *    supportsPredictiveItemAnimations 默认 false）；
  *  - 空态（itemCount=0）直接返回，交由外部空态提示展示。
  */
 public class AvoidGridLayoutManager extends RecyclerView.LayoutManager {
 
-    /** 与 AppListAdapter.updateItemSquareSize 保持一致的格高比例 */
-    private static final float CELL_HEIGHT_FACTOR = 1.3f;
     /** 兜底行数上限：避免异常数据（如超高避让区域）导致死循环 */
     private static final int MAX_ROWS = 2000;
 
     private int columnCount;
+    /** 格子缩放百分比：格高/ 图标尺寸的公共来源，见 GridMetrics */
+    private int cellScale = GridMetrics.DEFAULT_CELL_SCALE;
+    /** 密度相关参数，构造时取一次，避免每次 onLayoutChildren 都查 DisplayMetrics */
+    private final float density;
+    private final float scaledDensity;
     private List<ZoneStore.Zone> zones = new ArrayList<>();
     /** 避让区域归一化坐标的参考尺寸（背景显示区实测像素） */
     private float zoneRefW, zoneRefH;
@@ -54,6 +58,9 @@ public class AvoidGridLayoutManager extends RecyclerView.LayoutManager {
 
     public AvoidGridLayoutManager(Context context, int columnCount) {
         this.columnCount = Math.max(1, columnCount);
+        android.util.DisplayMetrics dm = context.getResources().getDisplayMetrics();
+        this.density = dm.density;
+        this.scaledDensity = dm.scaledDensity;
         // 主界面 RecyclerView 尺寸固定（ViewPager2 页面），走自动测量即可，
         // onLayoutChildren 里按最终宽高铺格子
         setAutoMeasureEnabled(true);
@@ -64,6 +71,15 @@ public class AvoidGridLayoutManager extends RecyclerView.LayoutManager {
         n = Math.max(1, n);
         if (n == columnCount) return;
         columnCount = n;
+        requestLayout();
+    }
+
+    /** 设置格子缩放百分比（与 AppListAdapter / 避让区编辑器必须用同一个值） */
+    public void setCellScale(int percent) {
+        int v = Math.max(GridMetrics.MIN_CELL_SCALE,
+                Math.min(GridMetrics.MAX_CELL_SCALE, percent));
+        if (v == cellScale) return;
+        cellScale = v;
         requestLayout();
     }
 
@@ -128,7 +144,8 @@ public class AvoidGridLayoutManager extends RecyclerView.LayoutManager {
 
         cellW = Math.max(1, availW / columnCount);
         lastColW = cellW + (availW - cellW * columnCount); // 最后一列吃掉整除余数
-        cellH = Math.max(1, Math.round(cellW * CELL_HEIGHT_FACTOR));
+        cellH = Math.max(1, GridMetrics.cellHeightPx(cellW, cellScale,
+                density, scaledDensity, columnCount));
 
         buildFreeCells(itemCount);
 

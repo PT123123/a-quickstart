@@ -170,6 +170,12 @@ public class SettingsActivity extends AppCompatActivity {
                     }
                 });
 
+        /** 请求把本应用设为默认主屏幕：RoleManager 文档要求必须用 ForResult 启动，
+         *  普通 startActivity 在 ColorOS 等机型上会静默无反应 */
+        private final ActivityResultLauncher<Intent> homeRoleLauncher =
+                registerForActivityResult(new ActivityResultContracts.StartActivityForResult(),
+                        result -> refreshLauncherStatus());
+
         static SettingsFragment newInstance(int xmlResId) {
             SettingsFragment fragment = new SettingsFragment();
             Bundle args = new Bundle();
@@ -200,11 +206,41 @@ public class SettingsActivity extends AppCompatActivity {
                 });
             }
 
+            // 桌面启动器：一键把本应用设为默认主屏幕（桌面）
+            Preference defaultLauncher = findPreference("set_default_launcher");
+            if (defaultLauncher != null) {
+                defaultLauncher.setOnPreferenceClickListener(pref -> {
+                    requestDefaultHome();
+                    return true;
+                });
+            }
+
             // 背景颜色
             Preference bgColor = findPreference("background_color");
             if (bgColor != null) {
                 bgColor.setOnPreferenceClickListener(pref -> {
                     showColorPicker("background_color", "设置背景颜色");
+                    return true;
+                });
+            }
+
+            // 图标底色（透明底）：剥掉图标自带背景层。
+// 外观是**烘焙进缓存 PNG** 的，所以改了必须清内存+磁盘图标缓存并全量重扫，
+// 否则会「改了设置没反应」。
+            ListPreference iconLayer = findPreference("icon_layer_mode");
+            if (iconLayer != null) {
+                iconLayer.setOnPreferenceChangeListener((pref, val) -> {
+                    String mode = String.valueOf(val);
+                    final CharSequence label = iconLayer.getEntries()[iconLayer.findIndexOfValue(mode)];
+                    // 先写新模式，再清缓存重建，否则重建时用的还是旧模式
+                    com.quickstart.util.IconCache.setLayerMode(mode);
+                    com.quickstart.util.IconCache.clear(requireContext());
+                    com.quickstart.util.FastCache.clear(requireContext());
+                    getPreferenceManager().getSharedPreferences()
+                            .edit().putBoolean("force_refresh_pending", true).apply();
+                    Toast.makeText(getContext(),
+                            "图标底色: " + label + "，返回后重建图标",
+                            Toast.LENGTH_SHORT).show();
                     return true;
                 });
             }
@@ -254,6 +290,15 @@ public class SettingsActivity extends AppCompatActivity {
                 });
             }
 
+            // 壁纸库：快速切回之前选过的壁纸
+            Preference wallpaperLib = findPreference("bg_wallpaper_library");
+            if (wallpaperLib != null) {
+                wallpaperLib.setOnPreferenceClickListener(pref -> {
+                    startActivity(new Intent(requireContext(), WallpaperLibraryActivity.class));
+                    return true;
+                });
+            }
+
             // 图标避让区域：在背景图上划定图标避开区域（需先设置图片背景）
             Preference avoidZones = findPreference("bg_avoid_zones");
             if (avoidZones != null) {
@@ -271,12 +316,12 @@ public class SettingsActivity extends AppCompatActivity {
             Preference clearBgImage = findPreference("clear_background_image");
             if (clearBgImage != null) {
                 clearBgImage.setOnPreferenceClickListener(pref -> {
-                    getPreferenceManager().getSharedPreferences()
-                            .edit().remove("background_image_path").apply();
-                    // 同时删除原图与所有预生成的模糊图，避让区域一并清除
-                    BackgroundManager.clearAll(requireContext());
-                    ZoneStore.clear(requireContext());
-                    Toast.makeText(getContext(), "已恢复默认背景", Toast.LENGTH_SHORT).show();
+                    // 只切回纯色，壁纸库里的图保留，用户还能从「壁纸库」切回来
+                    BackgroundManager.detachCurrent(requireContext());
+                    // 所有壁纸专属的避让区域一并清除（否则会留一堆孤儿设置）
+                    ZoneStore.clearAll(requireContext());
+                    updateWallpaperLibrarySummary();
+                    Toast.makeText(getContext(), "已恢复默认背景（壁纸库仍保留）", Toast.LENGTH_SHORT).show();
                     return true;
                 });
             }
@@ -442,6 +487,71 @@ public class SettingsActivity extends AppCompatActivity {
         public void onResume() {
             super.onResume();
             refreshAdSkipStatus();
+            updateWallpaperLibrarySummary();
+            refreshLauncherStatus();
+        }
+
+        /**
+         * 设为桌面启动器：拉起系统的「主屏幕应用」选择界面。
+         *
+         * Android 10+ 不允许应用自己改默认桌面，只能由系统弹框让用户确认，
+         * 因此优先用 RoleManager 请求 HOME 角色（必须 ForResult 启动，否则部分 ROM 静默失败）；
+         * 低版本或角色不可用时退回系统的「主屏幕」设置页。
+         */
+        private void requestDefaultHome() {
+            android.content.Context ctx = getContext();
+            if (ctx == null) return;
+            if (MainActivity.isDefaultHome(ctx)) {
+                Toast.makeText(ctx, "「快开启」已经是当前桌面了", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                try {
+                    android.app.role.RoleManager rm =
+                            ctx.getSystemService(android.app.role.RoleManager.class);
+                    if (rm != null && rm.isRoleAvailable(android.app.role.RoleManager.ROLE_HOME)) {
+                        homeRoleLauncher.launch(rm.createRequestRoleIntent(
+                                android.app.role.RoleManager.ROLE_HOME));
+                        return;
+                    }
+                    android.util.Log.d("KSQ", "ROLE_HOME 不可用，退回系统主屏幕设置页");
+                } catch (Throwable t) {
+                    android.util.Log.w("KSQ", "请求 HOME 角色失败，退回系统主屏幕设置页", t);
+                }
+            }
+            try {
+                startActivity(new Intent(android.provider.Settings.ACTION_HOME_SETTINGS));
+            } catch (Throwable t) {
+                android.util.Log.w("KSQ", "打开系统主屏幕设置页失败", t);
+                Toast.makeText(ctx,
+                        "无法打开桌面选择界面，请到 系统设置 → 应用 → 默认应用管理 → 主屏幕 里选择",
+                        Toast.LENGTH_LONG).show();
+            }
+        }
+
+        /** 刷新「设为桌面启动器」条目摘要：反映当前是否已是默认主屏幕 */
+        private void refreshLauncherStatus() {
+            Preference pref = findPreference("set_default_launcher");
+            if (pref == null || getContext() == null) return;
+            pref.setSummary(MainActivity.isDefaultHome(requireContext())
+                    ? "已是当前桌面：按 Home 键即回到快开启，自动全屏且返回键不会退出到空白桌面"
+                    // 国产 ROM 常把第三方桌面从系统选择页里过滤掉，提前说明避免误以为功能坏了
+                    : "点击设为主屏幕。OPPO/vivo 等机型可能不把第三方桌面列进系统选择页，"
+                            + "可到 系统设置 → 应用 → 默认应用管理 → 主屏幕 查看；"
+                            + "若那里没有「快开启」，属该 ROM 的限制");
+        }
+
+        /** 刷新「壁纸库」条目摘要：从壁纸库页返回后要反映最新的张数（可能在那边删过图） */
+        private void updateWallpaperLibrarySummary() {
+            Preference lib = findPreference("bg_wallpaper_library");
+            if (lib == null || getContext() == null) return;
+            java.util.List<BackgroundManager.Wallpaper> list =
+                    BackgroundManager.listWallpapers(requireContext());
+            if (list.isEmpty()) {
+                lib.setSummary("还没有存过壁纸，选一张图片背景就会自动保存");
+            } else {
+                lib.setSummary("已保存 " + list.size() + " 张 · 点击快速切换回之前的壁纸");
+            }
         }
 
         /** 刷新无障碍服务开启状态（从系统设置返回后自动更新） */

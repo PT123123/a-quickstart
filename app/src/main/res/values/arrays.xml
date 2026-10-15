@@ -107,6 +107,18 @@
         <item>heavy</item>
     </string-array>
 
+    <!-- 应用图标外观：透明底（默认）/ 原样 / 主色圆角底（前景太稀疏时用） -->
+    <string-array name="icon_layer_entries">
+        <item>透明底（只取前景层）</item>
+        <item>保持原样</item>
+        <item>主色圆角底（前景太稀疏时用）</item>
+    </string-array>
+    <string-array name="icon_layer_values">
+        <item>foreground</item>
+        <item>keep</item>
+        <item>tint</item>
+    </string-array>
+
     <string-array name="ad_skip_time_entries">
         <item>打开后 3 秒内</item>
         <item>打开后 5 秒内</item>

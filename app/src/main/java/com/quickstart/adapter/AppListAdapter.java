@@ -19,6 +19,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.quickstart.R;
 import com.quickstart.model.AppEntry;
 import com.quickstart.util.AppLoader;
+import com.quickstart.util.GridMetrics;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -56,6 +57,8 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
     private android.content.res.ColorStateList defaultFontColors;
     private boolean showRecentDot = true;
     private int columnCount = 3;
+    /** 格子缩放百分比（GridMetrics.MIN_CELL_SCALE~MAX），100 = 原始大小 */
+    private int cellScale = GridMetrics.DEFAULT_CELL_SCALE;
     /** 图标透明度对应的 View alpha（1f 完全不透明，0f 完全不可见） */
     private float iconAlpha = 1f;
     /** 角标手势模式，每次 submit 时重新读取一次，避免每个 item 重绑都查 SharedPreferences */
@@ -74,6 +77,18 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
     }
     public void setShowRecentDot(boolean show) { this.showRecentDot = show; notifyDataSetChanged(); }
     public void setColumnCount(int count) { this.columnCount = count; notifyDataSetChanged(); }
+
+    /**
+     * 设置格子缩放百分比（图标与格子同比放大/ 缩小）。
+     * 与 setColumnCount 一样会 notifyDataSetChanged，让已显示的格子立刻换尺寸。
+     */
+    public void setCellScale(int percent) {
+        int v = Math.max(GridMetrics.MIN_CELL_SCALE,
+                Math.min(GridMetrics.MAX_CELL_SCALE, percent));
+        if (v == cellScale) return;
+        this.cellScale = v;
+        notifyDataSetChanged();
+    }
 
     /** 角标手势设置变化后调用：清除缓存并整体重绑，已显示的角标立即换用新手势 */
     public void invalidateBadgeGesture() {
@@ -158,10 +173,11 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
         // 图标透明度（View alpha 是视图属性，payload "icon" 局部刷新不会重置，无需重复设置）
         h.icon.setAlpha(iconAlpha);
 
-        // 尺寸只在列数变化或首次绑定时应用，避免每次重绑都触发 requestLayout
-        if (h.appliedColumnCount != columnCount) {
+        // 尺寸只在列数/缩放变化或首次绑定时应用，避免每次重绑都触发 requestLayout
+        if (h.appliedColumnCount != columnCount || h.appliedCellScale != cellScale) {
             updateItemSquareSize(h);
             h.appliedColumnCount = columnCount;
+            h.appliedCellScale = cellScale;
         }
 
         h.itemView.setOnClickListener(v -> {
@@ -264,28 +280,26 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
     }
 
     private void updateItemSquareSize(VH h) {
-        int screenWidth = h.itemView.getResources().getDisplayMetrics().widthPixels;
-        int cellWidth = screenWidth / columnCount;
-        if (cellWidth > 0) {
+        android.util.DisplayMetrics dm = h.itemView.getResources().getDisplayMetrics();
+        int cellWidth = dm.widthPixels / columnCount;
+        // 尺寸公式集中在 GridMetrics，避免与 LayoutManager / 避让区编辑器不一致
+        int cellHeight = GridMetrics.cellHeightPx(cellWidth, cellScale,
+                dm.density, dm.scaledDensity, columnCount);
+        if (cellHeight > 0) {
             ViewGroup.LayoutParams lp = h.itemView.getLayoutParams();
-            lp.height = (int) (cellWidth * 1.3);
+            lp.height = cellHeight;
             h.itemView.setLayoutParams(lp);
 
-            int iconSize = (int) (cellWidth * 0.65);
-            ViewGroup.LayoutParams iconLp = h.icon.getLayoutParams();
-            iconLp.width = iconSize;
-            iconLp.height = iconSize;
-            h.icon.setLayoutParams(iconLp);
+            int iconSize = GridMetrics.iconSizePx(cellWidth, cellScale);
+            if (iconSize > 0) {
+                ViewGroup.LayoutParams iconLp = h.icon.getLayoutParams();
+                iconLp.width = iconSize;
+                iconLp.height = iconSize;
+                h.icon.setLayoutParams(iconLp);
+            }
         }
-        float textSize;
-        switch (columnCount) {
-            case 2: textSize = 14f; break;
-            case 3: textSize = 12f; break;
-            case 4: textSize = 11f; break;
-            case 5: textSize = 10f; break;
-            default: textSize = 12f; break;
-        }
-        h.name.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, textSize);
+        h.name.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP,
+                GridMetrics.textSizeSp(columnCount));
     }
 
     private CharSequence buildHighlightedLabel(AppEntry e) {
@@ -355,6 +369,8 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
         final TextView keyBadge;
         /** 记录当前 holder 已应用的列数，避免每次重绑都重设尺寸触发 requestLayout */
         int appliedColumnCount = -1;
+        /** 记录当前 holder 已应用的格子缩放百分比，缩放变化时同样需要重设尺寸 */
+        int appliedCellScale = -1;
 
         VH(@NonNull View itemView) {
             super(itemView);

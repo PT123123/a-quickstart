@@ -24,6 +24,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import com.quickstart.model.AppEntry;
 import com.quickstart.util.BackgroundManager;
 import com.quickstart.util.FastCache;
+import com.quickstart.util.GridMetrics;
 import com.quickstart.util.IconCache;
 import com.quickstart.util.ZoneStore;
 
@@ -180,12 +181,15 @@ public class ZoneEditorActivity extends AppCompatActivity {
             }
             sortPreviewApps(shown, res.installTimes);
 
-            // 与主界面同款网格参数（列数读取逻辑必须与 MainActivity.getColumnCount 一致）
+            // 与主界面同款网格参数（列数/缩放读取逻辑必须与 MainActivity 一致）
             int columns = MainActivity.readColumnCountPref(this);
+            int cellScale = GridMetrics.readCellScale(this);
             float density = getResources().getDisplayMetrics().density;
             float scale = previewScale(canvasW);
             float cellW = canvasW / (float) columns;
-            float cellH = cellW * 1.3f;
+            float cellH = GridMetrics.cellHeightPx(Math.round(cellW), cellScale,
+                    density, getResources().getDisplayMetrics().scaledDensity, columns,
+                    scale > 0 ? 1f / scale : 1f);
             float topInset = 28f * density * scale;
             // 首屏行数 + 一行余量；画布底部 T9 条占位不计
             int rows = Math.max(1, (int) ((canvasH - topInset) / cellH)) + 1;
@@ -210,7 +214,9 @@ public class ZoneEditorActivity extends AppCompatActivity {
             }
 
             main.post(() -> {
-                if (!isDestroyed() && canvas != null) canvas.setPreviewApps(shown, columns, scale);
+                if (!isDestroyed() && canvas != null) {
+                    canvas.setPreviewApps(shown, columns, scale, cellScale);
+                }
             });
         });
     }
@@ -326,6 +332,8 @@ public class ZoneEditorActivity extends AppCompatActivity {
          */
         private final List<AppEntry> previewApps = new ArrayList<>();
         private int previewColumns = 3;
+        /** 预览用的格子缩放百分比，与主界面读同一个设置项 */
+        private int previewCellScale = GridMetrics.DEFAULT_CELL_SCALE;
         /** 预览相对主界面的缩放（画布宽 / 背景显示区实际宽） */
         private float previewScale = 1f;
         private final android.text.TextPaint previewTextPaint =
@@ -363,11 +371,12 @@ public class ZoneEditorActivity extends AppCompatActivity {
         }
 
         /** 设置网格预览数据（后台线程加载完图标后主线程回调） */
-        void setPreviewApps(List<AppEntry> apps, int columns, float scale) {
+        void setPreviewApps(List<AppEntry> apps, int columns, float scale, int cellScale) {
             previewApps.clear();
             if (apps != null) previewApps.addAll(apps);
             previewColumns = Math.max(1, columns);
             previewScale = scale > 0 ? scale : 1f;
+            previewCellScale = cellScale;
             invalidate();
         }
 
@@ -481,18 +490,15 @@ public class ZoneEditorActivity extends AppCompatActivity {
             if (previewApps.isEmpty() || getWidth() <= 0 || getHeight() <= 0) return;
             android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
             float cellW = getWidth() / (float) previewColumns;
-            float cellH = cellW * 1.3f;
-            float iconSize = cellW * 0.65f;
+            // 公式统一走 GridMetrics：画布被 previewScale 缩小过，
+            // 密度相关的留白要按 1/previewScale 换算，否则预览和主界面对不上
+            float cellH = GridMetrics.cellHeightPx(Math.round(cellW), previewCellScale,
+                    dm.density, dm.scaledDensity, previewColumns,
+                    previewScale > 0 ? 1f / previewScale : 1f);
+            float iconSize = GridMetrics.iconSizePx(Math.round(cellW), previewCellScale);
             float padV = 6f * dm.density * previewScale;      // item_app 纵向内边距
             float topInset = 28f * dm.density * previewScale; // 主界面顶部拉手让位
-            float textSp;
-            switch (previewColumns) { // 与 AppListAdapter.updateItemSquareSize 一致
-                case 2: textSp = 14f; break;
-                case 4: textSp = 11f; break;
-                case 5: textSp = 10f; break;
-                default: textSp = 12f; break;
-            }
-            float textPx = textSp * dm.scaledDensity * previewScale;
+            float textPx = GridMetrics.textSizeSp(previewColumns) * dm.scaledDensity * previewScale;
             previewTextPaint.setTextSize(textPx);
 
             int appIndex = 0;

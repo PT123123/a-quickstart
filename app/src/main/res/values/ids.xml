@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  用于 View.setTag(int key, Object) 的自定义 tag id。
+  setTag(Object) 的无参重载会与 Android 框架内部占用的 tag 冲突，必须用带 key 的重载。
+-->
+<resources>
+    <!-- T9 按键内 TextView 的原始字号（sp），键盘高度缩放时以它为基准，避免反复缩放导致字号指数级漂移 -->
+    <item name="tag_key_base_text_size" type="id" />
+    <!-- T9 按键右下角绑定应用图标的原始边长（px），同上 -->
+    <item name="tag_key_base_icon_size" type="id" />
+</resources>

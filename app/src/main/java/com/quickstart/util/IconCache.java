@@ -18,6 +18,10 @@ import java.util.concurrent.Executors;
  * 图标缓存：内存 LruCache + 磁盘文件缓存。
  * 支持批量预加载，确保列表显示时图标已在内存中。
  * 所有图标统一降采样到显示所需尺寸，避免全分辨率位图撑爆内存引发 GC 卡顿。
+ *
+ * **图标外观模式**（设置项 {@code icon_layer_mode}）在<b>落盘前</b>生效：
+ * 因为缓存里存的是已经合成好的 PNG，模式改动必须清缓存重建，
+ * 否则改了设置会「看起来没反应」。见 {@link #layerMode}。
  */
 public final class IconCache {
 
@@ -27,6 +31,58 @@ public final class IconCache {
     private static final int TARGET_ICON_SIZE = 128;
     /** 图标落盘尺寸（px）：留出高密度屏放大的余量 */
     public static final int DISK_ICON_SIZE = TARGET_ICON_SIZE * 2;
+
+    /**
+     * 当前图标外观模式。null = 保持系统原样。
+     * 由 {@link #setLayerMode} 在应用启动 / 设置变更时写入，
+     * 所有图标渲染路径都读它，保证同一张图在内存缓存与磁盘缓存里长得一样。
+     */
+    private static volatile String layerMode = null;
+
+    /** 设置图标外观模式；传 null 或 MODE_KEEP 表示恢复原样。调用方需自行清缓存 */
+    public static void setLayerMode(String mode) {
+        layerMode = (mode == null || IconLayers.MODE_KEEP.equals(mode)) ? null : mode;
+    }
+
+    public static String getLayerMode() {
+        return layerMode;
+    }
+
+    /**
+     * 渲染算法版本。**只要图标长什么样变了就必须 +1**。
+     *
+     * 缓存里存的是已合成好的 PNG，升级 APK 并不会让旧缓存失效——
+     * 用户会继续看到旧算法渲染的图标，还以为改动没生效（本次就踩了：
+     * 前景层误缩小 1.5 倍，改完代码装上仍是小的）。
+     * 这个版本号写进 SP，启动时比对，不一致就清图标缓存 + FastCache 重建。
+     */
+    private static final int RENDER_VERSION = 3;
+    private static final String SP_RENDER_VERSION = "icon_render_version";
+
+    /**
+     * 启动时调用：渲染算法版本变化则清掉全部图标缓存并返回 true（调用方需全量重扫）。
+     * 版本一致返回 false。
+     */
+    public static boolean syncRenderVersion(Context ctx) {
+        int saved = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .getInt(SP_RENDER_VERSION, 0);
+        if (saved == RENDER_VERSION) return false;
+        ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                .edit().putInt(SP_RENDER_VERSION, RENDER_VERSION).apply();
+        clear(ctx);
+        FastCache.clear(ctx);
+        return true;
+    }
+
+    /**
+     * 按当前外观模式渲染图标（这是所有图标落盘/入内存的唯一入口）。
+     * MODE_KEEP 时就是原来的降采样逻辑，行为与改动前完全一致。
+     */
+    static Bitmap renderIcon(Drawable drawable, int targetSize) {
+        String mode = layerMode;
+        if (mode == null) return drawableToScaledBitmap(drawable, targetSize);
+        return IconLayers.toBitmap(drawable, mode, targetSize, 0);
+    }
 
     /** 内存缓存（约 4MB；maxSize 单位为 KB，与 sizeOf 返回值一致） */
     private static final LruCache<String, Drawable> memoryCache = new LruCache<>(4 * 1024) {
@@ -78,7 +134,7 @@ public final class IconCache {
     /** 保存图标到缓存（内存 + 磁盘），存入内存前统一降采样 */
     public static void put(Context ctx, String pkg, Drawable drawable) {
         if (drawable == null) return;
-        Bitmap scaled = drawableToScaledBitmap(drawable, TARGET_ICON_SIZE);
+        Bitmap scaled = renderIcon(drawable, TARGET_ICON_SIZE);
         if (scaled != null) {
             memoryCache.put(pkg, new BitmapDrawable(ctx.getResources(), scaled));
         }
@@ -89,6 +145,10 @@ public final class IconCache {
      * 只写入内存缓存（不落盘）。用于 FastCache 内嵌图标解码结果的回填：
      * 这些 PNG 本就来自磁盘 icons/ 目录，无需再压缩写回一遍，
      * 且 preloadAll / IconCache.get 命中内存后即跳过，重复解码随之消除。
+     *
+     * 入参是**已经合成好的位图**（FastCache 里存的就是渲染完的 PNG），
+     * 所以这里只降采样、不再走 {@link #renderIcon}：
+     * 外观模式已在 FastCache 落盘时应用过，重复套用既多余也可能出错。
      */
     public static void putMemory(Context ctx, String pkg, Drawable drawable) {
         if (drawable == null) return;
@@ -131,7 +191,7 @@ public final class IconCache {
                 try {
                     Drawable icon = ctx.getPackageManager().getApplicationIcon(pkg);
                     saveToDisk(ctx, pkg, icon);
-                    Bitmap scaled = drawableToScaledBitmap(icon, TARGET_ICON_SIZE);
+                    Bitmap scaled = renderIcon(icon, TARGET_ICON_SIZE);
                     if (scaled != null) {
                         memoryCache.put(pkg, new BitmapDrawable(ctx.getResources(), scaled));
                     }
@@ -209,7 +269,7 @@ public final class IconCache {
 
     private static void saveToDisk(Context ctx, String pkg, Drawable drawable) {
         try {
-            Bitmap bitmap = drawableToScaledBitmap(drawable, DISK_ICON_SIZE);
+            Bitmap bitmap = renderIcon(drawable, DISK_ICON_SIZE);
             if (bitmap == null || bitmap.isRecycled()) return;
             File file = getIconFile(ctx, pkg);
             try (FileOutputStream fos = new FileOutputStream(file)) {

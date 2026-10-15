@@ -14,16 +14,22 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * 背景统一管理：存放、预生成模糊、读取。
+ * 背景统一管理：壁纸库（归档）、预生成模糊、读取。
  *
  * 设计原则：
- *  1. 模糊图**只在此处离线预生成**（选图后 / 切换模糊档位时），主界面运行时绝不计算模糊；
- *  2. 主界面只做「挑一个已经存在的文件 → 解码 → 显示」；
- *  3. 所有产物放在 filesDir/bg/ 下，避免被系统清理缓存后失效：
- *       bg/source.jpg       裁剪后的原图（按应用列表比例）
- *       bg/blur_light.jpg   轻微模糊
- *       bg/blur_medium.jpg  中等模糊
- *       bg/blur_heavy.jpg   强模糊（玻璃效果）
+ *  1. **选过的壁纸一律留档**：每次选图裁剪后存进 filesDir/wallpapers/，文件名即 id
+ *     （毫秒时间戳，天然按时间排序），用户可在设置里一键切回任意一张，也能手动删除；
+ *  2. 当前壁纸 id 记在 settings 的 `bg_wallpaper_id`，为空 = 纯色背景；
+ *  3. 模糊图**只在此处离线预生成**（选图后 / 切换模糊档位时），主界面运行时绝不计算模糊；
+ *  4. 模糊图**只为当前壁纸缓存**（filesDir/bg/blur_*.jpg），换壁纸时作废重生成——
+ *     每张都存 3 份要占 4 倍空间，而模糊本身是毫秒级的，没必要；
+ *  5. 所有产物放在 filesDir 下，避免被系统清理缓存后失效。
+ *
+ * 目录布局：
+ *   filesDir/wallpapers/&lt;id&gt;.jpg 壁纸库：裁剪后的原图（永久保留，除非手动删）
+ *   filesDir/wallpapers/&lt;id&gt;.thumb.jpg  列表缩略图（惰性生成）
+ *   filesDir/bg/source.jpg             旧版单张背景（仅迁移期读取）
+ *   filesDir/bg/blur_*.jpg             当前壁纸的各档模糊图
  */
 public final class BackgroundManager {
 
@@ -31,6 +37,8 @@ public final class BackgroundManager {
 
     public static final String PREF_IMAGE = "background_image_path";
     public static final String PREF_BLUR = "background_blur";
+    /** 当前壁纸库条目 id；为空表示纯色背景 */
+    public static final String PREF_WALLPAPER_ID = "bg_wallpaper_id";
     /** 应用列表显示区宽高比（w/h），由 MainActivity 实测写入，裁剪界面据此固定裁剪框 */
     public static final String PREF_ASPECT = "bg_aspect_ratio";
     public static final String PREF_AREA_W = "bg_area_width";
@@ -45,11 +53,19 @@ public final class BackgroundManager {
     /** 输出图最长边上限，控制内存与体积 */
     public static final int MAX_EDGE = 1080;
 
+    /** 壁纸库容量上限：超出后删最旧的（永不删当前正在用的那张） */
+    public static final int MAX_WALLPAPERS = 60;
+
     private static final String DIR_NAME = "bg";
     private static final String SOURCE_NAME = "source.jpg";
     private static final String BLUR_PREFIX = "blur_";
     private static final String LEGACY_NAME = "bg_original.jpg";
+    private static final String LIB_DIR_NAME = "wallpapers";
+    private static final String EXT_JPG = ".jpg";
+    private static final String THUMB_SUFFIX = ".thumb.jpg";
     private static final String PREF_MIGRATED = "bg_layout_v3";
+    /** 壁纸库迁移标记：把旧版单张 bg/source.jpg 收进库里 */
+    private static final String PREF_LIB_MIGRATED = "bg_library_v1";
 
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
@@ -59,21 +75,191 @@ public final class BackgroundManager {
 
     // ==================== 路径 ====================
 
-    public static File getDir(Context ctx) {
+    /** 壁纸库目录（存放所有选过的壁纸） */
+    public static File getLibraryDir(Context ctx) {
+        return new File(ctx.getFilesDir(), LIB_DIR_NAME);
+    }
+
+    private static File getDir(Context ctx) {
         return new File(ctx.getFilesDir(), DIR_NAME);
     }
 
-    public static File getSourceFile(Context ctx) {
+    /** 壁纸库中某条目的原图文件 */
+    public static File getWallpaperFile(Context ctx, String id) {
+        return new File(getLibraryDir(ctx), id + EXT_JPG);
+    }
+
+    /** 壁纸库中某条目的缩略图文件 */
+    public static File getThumbFile(Context ctx, String id) {
+        return new File(getLibraryDir(ctx), id + THUMB_SUFFIX);
+    }
+
+    /** 旧版单张原图（迁移期读，新逻辑不再写入） */
+    private static File getLegacySourceFile(Context ctx) {
         return new File(getDir(ctx), SOURCE_NAME);
     }
 
-    public static File getBlurredFile(Context ctx, String mode) {
-        return new File(getDir(ctx), BLUR_PREFIX + mode + ".jpg");
+    // ==================== 当前壁纸 id ====================
+
+    /** 当前壁纸 id；空串 / null = 纯色背景 */
+    public static String getCurrentId(Context ctx) {
+        if (ctx == null) return "";
+        String id = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(PREF_WALLPAPER_ID, "");
+        if (id == null || id.isEmpty()) return "";
+        // 文件被手动删掉后不能留悬空 id，否则主界面会以为有背景却是空图
+        return getWallpaperFile(ctx, id).exists() ? id : "";
     }
+
+    private static void setCurrentId(Context ctx, String id) {
+        android.content.SharedPreferences.Editor ed =
+                ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit();
+        if (id == null || id.isEmpty()) {
+            ed.remove(PREF_WALLPAPER_ID);
+            ed.remove(PREF_IMAGE);
+        } else {
+            ed.putString(PREF_WALLPAPER_ID, id);
+            ed.putString(PREF_IMAGE, getWallpaperFile(ctx, id).getAbsolutePath());
+        }
+        ed.apply();
+    }
+
+    // ==================== 壁纸库 ====================
+
+    /** 壁纸库条目 */
+    public static final class Wallpaper {
+        public final String id;
+        public final File file;
+        public final long addedAt;
+        public final boolean current;
+
+        Wallpaper(String id, File file, long addedAt, boolean current) {
+            this.id = id;
+            this.file = file;
+            this.addedAt = addedAt;
+            this.current = current;
+        }
+    }
+
+    /** 列出全部壁纸，按加入时间从新到旧 */
+    public static java.util.List<Wallpaper> listWallpapers(Context ctx) {
+        java.util.List<Wallpaper> out = new java.util.ArrayList<>();
+        File dir = getLibraryDir(ctx);
+        File[] files = dir.listFiles();
+        if (files == null) return out;
+        String current = getCurrentId(ctx);
+        for (File f : files) {
+            String name = f.getName();
+            if (!f.isFile() || !name.endsWith(EXT_JPG) || name.endsWith(THUMB_SUFFIX)) continue;
+            String id = name.substring(0, name.length() - EXT_JPG.length());
+            if (id.isEmpty()) continue;
+            out.add(new Wallpaper(id, f, f.lastModified(), id.equals(current)));
+        }
+        java.util.Collections.sort(out, (a, b) -> Long.compare(b.addedAt, a.addedAt));
+        return out;
+    }
+
+    /**
+     * 把裁剪好的图存进壁纸库并设为当前壁纸，返回新条目 id。
+     * 库满时自动清掉最旧的一张（永不删当前这张）。
+     */
+    public static String saveWallpaper(Context ctx, Bitmap bmp) {
+        File dir = getLibraryDir(ctx);
+        if (!dir.exists() && !dir.mkdirs()) return null;
+        String id = newId(ctx);
+        if (!saveJpeg(bmp, getWallpaperFile(ctx, id), 92)) return null;
+        // 先设为当前再裁剪：这样刚存的这张被标为 current，裁剪时绝不会被当成「最旧的」删掉
+        setCurrentId(ctx, id);
+        pruneLibrary(ctx);
+        return id;
+    }
+
+    /** 生成不冲突的时间戳 id（同一毫秒连选两张时避免覆盖） */
+    private static String newId(Context ctx) {
+        long now = System.currentTimeMillis();
+        String id = Long.toString(now);
+        File dir = getLibraryDir(ctx);
+        int n = 0;
+        while (new File(dir, id + EXT_JPG).exists() && n < 1000) {
+            id = Long.toString(now + (++n));
+        }
+        return id;
+    }
+
+    /** 切换到库中某张壁纸；不存在则返回 false。模糊图作废，由调用方按需重新预生成 */
+    public static boolean switchWallpaper(Context ctx, String id) {
+        if (id == null || id.isEmpty()) return false;
+        File f = getWallpaperFile(ctx, id);
+        if (!f.exists()) return false;
+        deleteGenerated(ctx);       // 旧壁纸的模糊图对新壁纸无效
+        setCurrentId(ctx, id);
+        return true;
+    }
+
+    /** 删除一张壁纸；若删的是当前壁纸则一并切回纯色背景 */
+    public static void deleteWallpaper(Context ctx, String id) {
+        if (id == null || id.isEmpty()) return;
+        if (id.equals(getCurrentId(ctx))) {
+            deleteGenerated(ctx);
+            setCurrentId(ctx, null);
+        }
+        deleteQuietly(getWallpaperFile(ctx, id));
+        deleteQuietly(getThumbFile(ctx, id));
+        // 该壁纸专属的避让区域一并清掉
+        ZoneStore.clearFor(ctx, id);
+    }
+
+    /** 容量控制：超上限时删最旧的（跳过当前壁纸）。
+     *  listWallpapers 是「新→旧」排序，所以必须**从末尾往前**删，
+     *  否则会先把刚存进去的那张（最新）删掉。 */
+    private static void pruneLibrary(Context ctx) {
+        java.util.List<Wallpaper> all = listWallpapers(ctx);
+        int extra = all.size() - MAX_WALLPAPERS;
+        for (int i = all.size() - 1; i >= 0 && extra > 0; i--) {
+            Wallpaper w = all.get(i);
+            if (w.current) continue;
+            deleteWallpaper(ctx, w.id);
+            extra--;
+        }
+    }
+
+    /** 壁纸库总占用（字节），用于设置页展示 */
+    public static long getLibrarySize(Context ctx) {
+        long total = 0;
+        File dir = getLibraryDir(ctx);
+        File[] files = dir.listFiles();
+        if (files == null) return 0;
+        for (File f : files) total += f.length();
+        return total;
+    }
+
+    /**
+     * 取壁纸缩略图（长边约THUMB_EDGE）；没有就现生成一张并缓存。
+     * 返回的 Bitmap 由调用方持有，调用方负责 recycle。
+     */
+    public static Bitmap loadThumb(Context ctx, String id) {
+        File thumb = getThumbFile(ctx, id);
+        if (thumb.exists()) {
+            Bitmap cached = decodeSampled(thumb, THUMB_EDGE, THUMB_EDGE);
+            if (cached != null) return cached;
+        }
+        File src = getWallpaperFile(ctx, id);
+        Bitmap full = decodeSampled(src, THUMB_EDGE, THUMB_EDGE);
+        if (full == null) return null;
+        try {
+            saveJpeg(full, thumb, 80);
+        } catch (Throwable ignored) {
+        }
+        return full;
+    }
+
+    private static final int THUMB_EDGE = 240;
+
+    // ==================== 读取当前背景 ====================
 
     /** 是否存在可用的背景原图 */
     public static boolean hasSource(Context ctx) {
-        return getSourceFile(ctx).exists();
+        return !getCurrentId(ctx).isEmpty();
     }
 
     /**
@@ -81,18 +267,32 @@ public final class BackgroundManager {
      * 指定档位的模糊图尚未生成时回退到原图（绝不在调用处现算模糊）。
      */
     public static File getDisplayFile(Context ctx, String mode) {
-        File src = getSourceFile(ctx);
-        if (!src.exists()) return null;
+        String id = getCurrentId(ctx);
+        if (id.isEmpty()) return null;
+        File src = getWallpaperFile(ctx, id);
         if (mode == null || NONE.equals(mode)) return src;
         File blurred = getBlurredFile(ctx, mode);
         return blurred.exists() ? blurred : src;
     }
 
-    /** 删除全部背景产物（原图 + 各档模糊图） */
+    public static File getBlurredFile(Context ctx, String mode) {
+        return new File(getDir(ctx), BLUR_PREFIX + mode + EXT_JPG);
+    }
+
+    /** 清除图片背景：切回纯色并删掉全部壁纸留档（用户手动清空） */
     public static void clearAll(Context ctx) {
+        deleteGenerated(ctx);
         deleteQuietly(getDir(ctx));
         deleteQuietly(new File(ctx.getFilesDir(), LEGACY_NAME));
         deleteLegacyCache(ctx);
+        deleteQuietly(getLibraryDir(ctx));
+        setCurrentId(ctx, null);
+    }
+
+    /** 只切回纯色，壁纸库保留（供「清除图片背景」使用，用户还能切回来） */
+    public static void detachCurrent(Context ctx) {
+        deleteGenerated(ctx);
+        setCurrentId(ctx, null);
     }
 
     /** 删除已生成的模糊图（换图时使用） */
@@ -217,10 +417,10 @@ public final class BackgroundManager {
 
     // ==================== 预生成（同步，必须在后台线程调用） ====================
 
-    /** 由原图生成全部模糊档位；返回是否全部成功 */
+    /** 由当前壁纸原图生成全部模糊档位；返回是否全部成功 */
     public static boolean generateAll(Context ctx) {
-        File srcFile = getSourceFile(ctx);
-        if (!srcFile.exists()) return false;
+        File srcFile = currentSourceFile(ctx);
+        if (srcFile == null) return false;
         Bitmap base = BitmapFactory.decodeFile(srcFile.getAbsolutePath());
         if (base == null) return false;
 
@@ -238,13 +438,21 @@ public final class BackgroundManager {
         File out = getBlurredFile(ctx, mode);
         if (out.exists()) return true;
 
-        File srcFile = getSourceFile(ctx);
-        if (!srcFile.exists()) return false;
+        File srcFile = currentSourceFile(ctx);
+        if (srcFile == null) return false;
         Bitmap base = BitmapFactory.decodeFile(srcFile.getAbsolutePath());
         if (base == null) return false;
         boolean ok = generateOne(ctx, base, mode);
         base.recycle();
         return ok;
+    }
+
+    /** 当前壁纸的原图文件；未选中壁纸返回 null */
+    private static File currentSourceFile(Context ctx) {
+        String id = getCurrentId(ctx);
+        if (id.isEmpty()) return null;
+        File f = getWallpaperFile(ctx, id);
+        return f.exists() ? f : null;
     }
 
     private static boolean generateOne(Context ctx, Bitmap base, String mode) {
@@ -340,30 +548,50 @@ public final class BackgroundManager {
     // ==================== 旧版本迁移 ====================
 
     /**
-     * 一次性迁移：把旧版 filesDir/bg_original.jpg 挪到新版目录，并清掉旧的运行时缓存。
+     * 一次性迁移（旧版单张背景 → 壁纸库）：
+     *  1) 把 filesDir/bg/source.jpg 或更早的 bg_original.jpg 收进壁纸库，并设为当前壁纸；
+     *  2) 清掉旧的运行时缓存。
      * 迁移后如缺少模糊图，返回 true 提示调用方后台补生成。
      */
     public static boolean prepare(Context ctx) {
         SharedPreferences sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        if (sp.getBoolean(PREF_MIGRATED, false)) return false;
-        sp.edit().putBoolean(PREF_MIGRATED, true).apply();
+        boolean needBlur = false;
 
-        File dir = getDir(ctx);
-        if (!dir.exists()) dir.mkdirs();
-        File src = getSourceFile(ctx);
-        File legacy = new File(ctx.getFilesDir(), LEGACY_NAME);
-        if (!src.exists() && legacy.exists()) {
-            legacy.renameTo(src);
+        if (!sp.getBoolean(PREF_MIGRATED, false)) {
+            sp.edit().putBoolean(PREF_MIGRATED, true).apply();
+            File dir = getDir(ctx);
+            if (!dir.exists()) dir.mkdirs();
+            deleteLegacyCache(ctx);
+            needBlur = true;
         }
-        deleteLegacyCache(ctx);
 
-        if (src.exists()) {
-            sp.edit().putString(PREF_IMAGE, src.getAbsolutePath()).apply();
-            // 每次升级版本号都会作废旧的模糊图，用新参数重生成
-            deleteGenerated(ctx);
-            return true;
+        // 壁纸库迁移：老版本只有一张 source.jpg，把它收编成库里的第一张
+        if (!sp.getBoolean(PREF_LIB_MIGRATED, false)) {
+            sp.edit().putBoolean(PREF_LIB_MIGRATED, true).apply();
+            if (getCurrentId(ctx).isEmpty()) {
+                File legacy = getLegacySourceFile(ctx);
+                File older = new File(ctx.getFilesDir(), LEGACY_NAME);
+                File src = legacy.exists() ? legacy : older;
+                if (src.exists()) {
+                    File dir = getLibraryDir(ctx);
+                    if (!dir.exists()) dir.mkdirs();
+                    String id = newId(ctx);
+                    // 移动而非复制：旧文件已无人引用，留着只会重复占空间
+                    if (!src.renameTo(getWallpaperFile(ctx, id))) {
+                        copyFile(src, getWallpaperFile(ctx, id));
+                    }
+                    setCurrentId(ctx, id);
+                    needBlur = true;
+                }
+            }
         }
-        return false;
+
+        // 选过壁纸但模糊档位还没生成（首启 / 换壁纸后 / 升级版本重生成）
+        String mode = sp.getString(PREF_BLUR, NONE);
+        if (!NONE.equals(mode) && !getBlurredFile(ctx, mode).exists()) {
+            needBlur = true;
+        }
+        return needBlur && hasSource(ctx);
     }
 
     private static void deleteLegacyCache(Context ctx) {
@@ -387,6 +615,29 @@ public final class BackgroundManager {
             }
         }
         f.delete();
+    }
+
+    /** 复制文件（renameTo 跨分区失败时的兜底） */
+    private static boolean copyFile(File from, File to) {
+        if (from == null || to == null || !from.exists()) return false;
+        java.io.FileInputStream in = null;
+        java.io.FileOutputStream out = null;
+        try {
+            File parent = to.getParentFile();
+            if (parent != null && !parent.exists()) parent.mkdirs();
+            in = new java.io.FileInputStream(from);
+            out = new java.io.FileOutputStream(to);
+            byte[] buf = new byte[16 * 1024];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            out.flush();
+            return true;
+        } catch (Exception e) {
+            return false;
+        } finally {
+            closeQuietly(in);
+            closeQuietly(out);
+        }
     }
 
     private static void closeQuietly(java.io.Closeable c) {

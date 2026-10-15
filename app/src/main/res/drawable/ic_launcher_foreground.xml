@@ -1,34 +1,22 @@
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自适应图标的前景层：把原始方形 logo 放进 108dp 画布中央的安全区。
 
-    <!-- 蓝色渐变背景 -->
-    <path
-        android:fillColor="#1565C0"
-        android:pathData="M0,0h108v108h-108z" />
+  两层缩放要一起算：
+  1. adaptive icon 的 108dp 画布里，只有中央约 66~72dp 保证不被 launcher 的
+     圆形 / 圆角遮罩裁掉，超出部分会被啃掉；
+  2. 原图 ic_launcher_logo.png 本身四周就留了 14/192 ≈ 7.3% 的边
+     （可见内容只占画布 85%），这部分留白会被一起缩进来。
 
-    <!-- 放大镜镜圈（白色圆环） -->
-    <path
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="4"
-        android:fillColor="#00000000"
-        android:pathData="M54,42 m-14,0 a14,14 0 1,0 28,0 a14,14 0 1,0 -28,0" />
-
-    <!-- 放大镜手柄 -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M63.5,51.5 L74,62 A3,3 0 0,1 69.5,66.5 L59,56 A3,3 0 0,1 63.5,51.5 Z" />
-
-    <!-- Quick 文字（用路径模拟） -->
-    <!-- Q -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M32,72 L32,78 L30,78 L30,72 Z M30,72 L36,72 L36,78 L34,78 L34,74 L32,74 Z" />
-    <!-- 简化的 Quick 用矩形条代替 -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M28,70 L40,70 L40,72 L35,72 L35,82 L33,82 L33,72 L28,72 Z" />
-
-</vector>
+  所以内缩量取 15dp：画布 108 - 15*2 = 78dp 装图，
+  图内 85% 的实际内容 ≈ 66dp，正好落在安全区里。
+  （之前内缩 21dp → 内容只剩 62dp，比其它应用图标明显偏小。）
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:drawable="@drawable/ic_launcher_logo"
+        android:left="15dp"
+        android:top="15dp"
+        android:right="15dp"
+        android:bottom="15dp" />
+</layer-list>

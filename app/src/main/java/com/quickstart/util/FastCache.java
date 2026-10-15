@@ -261,8 +261,10 @@ public final class FastCache {
     private static byte[] iconToBytes(Drawable drawable) {
         if (drawable == null) return null;
         try {
-            // 缩到落盘尺寸再压缩，缓存文件更小、读回时解码也更快
-            Bitmap bitmap = IconCache.drawableToScaledBitmap(drawable, IconCache.DISK_ICON_SIZE);
+            // 缩到落盘尺寸再压缩，缓存文件更小、读回时解码也更快。
+            // 必须走 IconCache.renderIcon：外观模式（透明底等）在这里就要烘焙进字节，
+            // 否则内嵌图标会绕过 IconCache 的磁盘缓存，两边长得不一样。
+            Bitmap bitmap = IconCache.renderIcon(drawable, IconCache.DISK_ICON_SIZE);
             if (bitmap == null) return null;
             java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, baos);

@@ -14,6 +14,7 @@ import com.quickstart.adapter.AppListAdapter;
 import com.quickstart.model.AppEntry;
 import com.quickstart.util.AvoidGridLayoutManager;
 import com.quickstart.util.BackgroundManager;
+import com.quickstart.util.GridMetrics;
 import com.quickstart.util.ZoneStore;
 
 import java.lang.ref.WeakReference;
@@ -58,6 +59,8 @@ public class CategoryPageFragment extends Fragment {
     private RecyclerView recycler;
     private AppListAdapter adapter;
     private int columnCount = 3;
+    /** 格子缩放百分比，需与宿主 Adapter 用同一个值，否则 item 尺寸与格子高度对不上 */
+    private int cellScale = GridMetrics.DEFAULT_CELL_SCALE;
     private String pendingAnimatorValue = "off";
 
     /** Activity 的弱引用，避免内存泄漏 */
@@ -135,6 +138,13 @@ public class CategoryPageFragment extends Fragment {
     public void setColumnCount(int n) {
         this.columnCount = Math.max(1, n);
         applyColumnCount();
+    }
+
+    /** 设置格子缩放百分比（图标/格子整体放大或缩小） */
+    public void setCellScale(int percent) {
+        this.cellScale = Math.max(GridMetrics.MIN_CELL_SCALE,
+                Math.min(GridMetrics.MAX_CELL_SCALE, percent));
+        applyCellScale();
     }
 
     /** 设置字体颜色 */
@@ -225,6 +235,16 @@ public class CategoryPageFragment extends Fragment {
         }
     }
 
+    /** 把缩放同步到 LayoutManager 与 Adapter：两者尺寸必须一致，否则内容会被裁 */
+    private void applyCellScale() {
+        if (adapter != null) adapter.setCellScale(cellScale);
+        if (recycler == null) return;
+        RecyclerView.LayoutManager lm = recycler.getLayoutManager();
+        if (lm instanceof AvoidGridLayoutManager) {
+            ((AvoidGridLayoutManager) lm).setCellScale(cellScale);
+        }
+    }
+
     /**
      * 构建避让式网格布局管理器：
      *  - 第一行给主界面顶部的收缩/展开拉手让位（半透明浮层，约 28dp）；
@@ -232,6 +252,7 @@ public class CategoryPageFragment extends Fragment {
      */
     private AvoidGridLayoutManager buildLayoutManager() {
         AvoidGridLayoutManager lm = new AvoidGridLayoutManager(requireContext(), columnCount);
+        lm.setCellScale(cellScale);
         lm.setTopInsetPx((int) (28 * getResources().getDisplayMetrics().density));
         loadZonesInto(lm);
         return lm;

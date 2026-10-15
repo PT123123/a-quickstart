@@ -19,6 +19,16 @@
         android:entryValues="@array/column_count_values" />
 
     <SeekBarPreference
+        android:key="cell_scale"
+        android:title="应用方格大小"
+        android:summary="缩放应用图标与方格（图标、文字同步放大或缩小），默认 100"
+        android:defaultValue="100"
+        android:max="150"
+        app:min="50"
+        app:showSeekBarValue="true"
+        app:seekBarIncrement="5" />
+
+    <SeekBarPreference
         android:key="icon_transparency"
         android:title="图标透明度"
         android:summary="数值越大图标越淡（0 为不透明，100 为全透明），默认 60"
@@ -26,6 +36,14 @@
         android:max="100"
         app:min="0"
         app:showSeekBarValue="true" />
+
+    <ListPreference
+        android:key="icon_layer_mode"
+        android:title="图标底色"
+        android:summary="透明底：剥掉图标自带的背景层，底色真正透明、大小不变（仅对 Android 8.0 以上的自适应图标有效，老应用图标本身就是一张合成图，无法剥离）"
+        android:defaultValue="foreground"
+        android:entries="@array/icon_layer_entries"
+        android:entryValues="@array/icon_layer_values" />
 
     <Preference
         android:key="font_color"
@@ -40,7 +58,12 @@
     <Preference
         android:key="background_image"
         android:title="图片背景"
-        android:summary="选择一张图片作为主界面背景" />
+        android:summary="选择一张图片作为主界面背景，选过的图会自动存进壁纸库" />
+
+    <Preference
+        android:key="bg_wallpaper_library"
+        android:title="壁纸库"
+        android:summary="快速切换回之前用过的壁纸，也可在这里删除" />
 
     <ListPreference
         android:key="background_blur"
@@ -64,6 +87,6 @@
     <Preference
         android:key="clear_background_image"
         android:title="清除图片背景"
-        android:summary="恢复使用纯色背景" />
+        android:summary="恢复使用纯色背景（壁纸库里的图仍保留，可随时切回）" />
 
 </PreferenceScreen>

@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 壁纸库条目：缩略图 + 时间/大小 + 「使用中」标记 + 删除按钮 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:padding="10dp"
+    android:background="?attr/selectableItemBackground"
+    android:clickable="true"
+    android:focusable="true">
+
+    <ImageView
+        android:id="@+id/wallpaper_thumb"
+        android:layout_width="72dp"
+        android:layout_height="54dp"
+        android:layout_marginEnd="12dp"
+        android:scaleType="centerCrop"
+        android:contentDescription="@null" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/wallpaper_time"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="15sp"
+            android:textColor="?android:attr/textColorPrimary" />
+
+        <TextView
+            android:id="@+id/wallpaper_meta"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textSize="12sp"
+            android:textColor="#999999" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/wallpaper_current"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="8dp"
+        android:paddingLeft="8dp"
+        android:paddingRight="8dp"
+        android:paddingTop="4dp"
+        android:paddingBottom="4dp"
+        android:text="使用中"
+        android:textSize="12sp"
+        android:textColor="@color/primary"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/wallpaper_delete"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:padding="8dp"
+        android:text="删除"
+        android:textSize="14sp"
+        android:textColor="#CC6666"
+        android:background="?attr/selectableItemBackground"
+        android:clickable="true"
+        android:focusable="true" />
+
+</LinearLayout>

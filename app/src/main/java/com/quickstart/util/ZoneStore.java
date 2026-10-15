@@ -8,6 +8,7 @@ import org.json.JSONObject;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 图标避让区域的存取：背景图片上由用户划定的若干「圆形 / 方形」区域（归一化坐标）。
@@ -16,8 +17,11 @@ import java.util.List;
  *  - 方形：x/y = 左上角，w/h = 宽高（x、w 以宽度为基准，y、h 以高度为基准，取值 0~1）；
  *  - 圆形：x/y = 圆心，w = 半径（以宽度为基准），h 不用。
  *
- * 存储为 "settings" 里的 JSON 字符串（key 见 {@link #PREF_KEY}），
- * ConfigTransfer 全量导出/导入会自动带上，无需单独处理。
+ * **按壁纸分键存储**：避让区域是相对某张具体壁纸划的，换壁纸后旧坐标毫无意义，
+ * 所以键名带上当前壁纸 id（{@link #prefKey}），每张壁纸各自记一套，互不干扰。
+ * 没有壁纸（纯色背景）时退回基键 {@link #PREF_KEY}。
+ *
+ * 存储为 "settings" 里的 JSON 字符串，ConfigTransfer 全量导出/导入会自动带上，无需单独处理。
  */
 public final class ZoneStore {
 
@@ -53,12 +57,18 @@ public final class ZoneStore {
     private ZoneStore() {
     }
 
+    /** 当前壁纸对应的避让区域键名（纯色背景时退回基键） */
+    public static String prefKey(Context ctx) {
+        String id = BackgroundManager.getCurrentId(ctx);
+        return id.isEmpty() ? PREF_KEY : PREF_KEY + "@" + id;
+    }
+
     /** 读取全部避让区域；无数据或解析失败返回空列表 */
     public static List<Zone> load(Context ctx) {
         List<Zone> out = new ArrayList<>();
         if (ctx == null) return out;
         SharedPreferences sp = ctx.getSharedPreferences(BackgroundManager.PREFS, Context.MODE_PRIVATE);
-        String json = sp.getString(PREF_KEY, "");
+        String json = sp.getString(prefKey(ctx), "");
         if (json == null || json.isEmpty()) return out;
         try {
             JSONArray arr = new JSONArray(json);
@@ -82,7 +92,7 @@ public final class ZoneStore {
     public static void save(Context ctx, List<Zone> zones) {
         SharedPreferences sp = ctx.getSharedPreferences(BackgroundManager.PREFS, Context.MODE_PRIVATE);
         if (zones == null || zones.isEmpty()) {
-            sp.edit().remove(PREF_KEY).apply();
+            sp.edit().remove(prefKey(ctx)).apply();
             return;
         }
         try {
@@ -96,15 +106,28 @@ public final class ZoneStore {
                 o.put("h", round(z.h));
                 arr.put(o);
             }
-            sp.edit().putString(PREF_KEY, arr.toString()).apply();
+            sp.edit().putString(prefKey(ctx), arr.toString()).apply();
         } catch (Exception ignored) {
         }
     }
 
-    /** 清除避让区域（清除图片背景时联动调用） */
-    public static void clear(Context ctx) {
+    /** 清除指定壁纸的避让区域（从壁纸库删掉那张时调用，与当前是否选中无关） */
+    public static void clearFor(Context ctx, String wallpaperId) {
+        if (ctx == null || wallpaperId == null || wallpaperId.isEmpty()) return;
         ctx.getSharedPreferences(BackgroundManager.PREFS, Context.MODE_PRIVATE)
-                .edit().remove(PREF_KEY).apply();
+                .edit().remove(PREF_KEY + "@" + wallpaperId).apply();
+    }
+
+    /** 清掉所有壁纸的避让区域（含历史遗留的基键），彻底清空避让设置 */
+    public static void clearAll(Context ctx) {
+        SharedPreferences sp = ctx.getSharedPreferences(BackgroundManager.PREFS, Context.MODE_PRIVATE);
+        SharedPreferences.Editor ed = sp.edit().remove(PREF_KEY);
+        for (Map.Entry<String, ?> e : sp.getAll().entrySet()) {
+            if (e.getKey() != null && e.getKey().startsWith(PREF_KEY + "@")) {
+                ed.remove(e.getKey());
+            }
+        }
+        ed.apply();
     }
 
     private static float clamp01(float v) {

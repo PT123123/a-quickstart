@@ -2,6 +2,12 @@
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
 
+    <!-- 桌面启动器：把本应用注册成主屏幕（HOME）候选，点此一键设为默认桌面 -->
+    <Preference
+        android:key="set_default_launcher"
+        android:title="设为桌面启动器"
+        android:summary="把「快开启」设为手机桌面（主屏幕），之后按 Home 键直接回到快开启" />
+
     <ListPreference
         android:key="window_size"
         android:title="窗口大小"

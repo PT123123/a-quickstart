@@ -27,7 +27,9 @@
         android:theme="@style/AppTheme"
         android:supportsRtl="true">
 
-        <!-- 主界面 -->
+        <!-- 主界面（同时是应用图标入口与桌面候选） -->
+        <!-- LAUNCHER 与 HOME 必须放在同一条 intent-filter 里：部分 ROM（如 ColorOS）的
+             「设为主屏幕」列表只认同时声明 LAUNCHER+HOME 的 activity，拆成两条会被过滤掉 -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -35,6 +37,8 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
 
@@ -101,6 +105,13 @@
             android:exported="false"
             android:label="图标避让区域"
             android:screenOrientation="portrait"
+            android:theme="@style/AppTheme" />
+
+        <!-- 壁纸库：切换 / 删除历史壁纸 -->
+        <activity
+            android:name=".WallpaperLibraryActivity"
+            android:exported="false"
+            android:label="壁纸库"
             android:theme="@style/AppTheme" />
 
         <!-- 快跳过（开屏广告跳过）无障碍服务 -->
