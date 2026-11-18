@@ -1,0 +1,26 @@
+# 变更记录
+
+## 2026-11-19 修复：避让区编辑器预览与主界面仍有不一致（3.2.2）
+
+- 现象：上一版换用 `previewGeometry` 后，OPPO 高密度屏上编辑器预览与主界面避让在部分格子仍会差一格。
+- 根因：
+  - 预览画布把区域的纵向归一化坐标乘以「画布 View 的实测高度」——该高度是取整值（极端情况下还会被容器裁切），与网格用的「真实背景区高度 × 缩放」不是同一基准，临界格子会翻转命中；
+  - 主界面图标/格子尺寸（`AppListAdapter`）用 `dm.widthPixels`（屏幕宽）算格宽，而 LayoutManager 用 RecyclerView 实测宽铺格子——小窗/分屏/折叠屏下两者不等，图标被撑大并与避让网格错位；
+  - 背景区参考宽高只在启动、键盘高度或窗口设置变化时重测，分屏拖动等系统级尺寸变化后编辑器仍在用旧参考。
+- 修复：
+  - `ZoneEditorActivity` 缓存 `PREF_AREA_W/H`，新增 `pxH()`：区域 y/h 一律按「真实背景区高度 × 画布缩放」换算，绘制、命中、拖动、新建全部走同一基准，与 `previewGeometry` 完全同源，不再依赖画布取整/裁切后的高度。
+  - `AppListAdapter` 新增 `setGridWidthPx`，图标尺寸改用列表实测宽；`CategoryPageFragment` 在布局变化时把 RecyclerView 实际宽喂给 Adapter，第三列余数也与 LayoutManager 一致。
+  - `MainActivity` 给 `viewPager` 加布局变化监听，列表区尺寸变化（分屏/小窗/折叠展开/键盘高度）后自动重测并同步 `PREF_AREA_W/H`，编辑器与主界面始终用同一份参考尺寸。
+- 门：`GridMetricsPreviewTest` 修正精确相切（切点会因浮点乘法顺序翻转判定，属退化用例），4 组设备参数 × 4 列数 × 5 档缩放逐格命中全部一致；全套 24 个 JVM 测试通过。
+
+## 2026-11-17 修复：OPPO 上避让区编辑器预览与主界面实际避让不一致
+
+- 现象：编辑器里图标绕开区域的效果，保存后在 OPPO（ColorOS，1080p/density 3 一类高密度窄屏）主界面上对不上；平板上看不出来。
+- 根因：预览格高拿画布尺寸直接套 `GridMetrics.cellHeightPx`，密度留白按 `1/previewScale` 换算——方向反了（画布是缩小过的，应乘 `previewScale`）。留白项被放大约 1/ps²（≈3.3 倍），在 OPPO 参数下压过比例项，预览每行比主界面高 35~120px，避让命中整片错位；平板上比例项恰好压过留白项，缺陷被掩盖。
+- 修复：
+  - `GridMetrics` 删除带 `unitScale` 的格高重载；新增 `previewGeometry`——先在真实屏幕坐标下算出与 `AvoidGridLayoutManager` 完全相同的整数几何（含最后一列吃整除余数），再整体乘 `previewScale`。预览从此是主界面的精确等比缩影。
+  - `GridMetrics` 新增 `TOP_INSET_DP / topInsetPx`，`CategoryPageFragment` 与编辑器共用，顶部拉手让位不再各写一份 28dp。
+  - `ZoneEditorActivity` 预览加载与绘制全部改走 `previewGeometry`；参考宽 `PREF_AREA_W` 只读一次缓存。
+- 门：`GridMetricsPreviewTest`（JVM）——4 组设备参数 × 4 列数 × 5 档缩放，逐格断言预览与主界面几何成比例、避让命中一致；control 臂复刻旧公式，断言其在 OPPO 参数下偏差 >10px、平板参数下 <2px（证明门看得见原缺陷，并解释为何只在 OPPO 暴露）。
+- 验证状态：单元测试与构建见本次提交；OPPO 真机复核待设备连接（当时 `adb devices` 为空）。
+- 已知关联隐患（未在本次改动）：`AppListAdapter.updateItemSquareSize` 用 `dm.widthPixels` 算格宽，小/中窗口模式下图标会按全屏宽算而偏大；全屏/桌面模式不受影响。

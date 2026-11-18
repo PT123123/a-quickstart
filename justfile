@@ -60,3 +60,7 @@ build-install device="phone":
 # 安装已构建的 release APK：just install-release phone
 install-release device="phone":
     powershell -NoProfile -ExecutionPolicy Bypass -File {{installer}} -Target {{device}} -Apk {{release_apk}}
+
+# 发布 release APK
+publish:
+    lanpub add {{release_apk}}

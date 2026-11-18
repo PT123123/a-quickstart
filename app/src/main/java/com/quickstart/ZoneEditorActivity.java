@@ -73,6 +73,10 @@ public class ZoneEditorActivity extends AppCompatActivity {
     /** 选中区域当时的尺寸（滑杆以此为基准缩放），选中变化时重置 */
     private float baseSize = -1f;
 
+    /** 背景显示区实测宽高（与主界面避让映射同一参考），缺省退回屏幕尺寸 */
+    private int realAreaW;
+    private int realAreaH;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -85,6 +89,11 @@ public class ZoneEditorActivity extends AppCompatActivity {
         }
 
         canvas = new ZoneCanvas(this);
+        SharedPreferences areaSp = getSharedPreferences(BackgroundManager.PREFS, MODE_PRIVATE);
+        realAreaW = areaSp.getInt(BackgroundManager.PREF_AREA_W, 0);
+        realAreaH = areaSp.getInt(BackgroundManager.PREF_AREA_H, 0);
+        if (realAreaW <= 0) realAreaW = getResources().getDisplayMetrics().widthPixels;
+        if (realAreaH <= 0) realAreaH = getResources().getDisplayMetrics().heightPixels;
         sizeSeekBar = findViewById(R.id.sb_zone_size);
         btnCircle = findViewById(R.id.btn_shape_circle);
         btnRect = findViewById(R.id.btn_shape_rect);
@@ -186,13 +195,11 @@ public class ZoneEditorActivity extends AppCompatActivity {
             int cellScale = GridMetrics.readCellScale(this);
             float density = getResources().getDisplayMetrics().density;
             float scale = previewScale(canvasW);
-            float cellW = canvasW / (float) columns;
-            float cellH = GridMetrics.cellHeightPx(Math.round(cellW), cellScale,
-                    density, getResources().getDisplayMetrics().scaledDensity, columns,
-                    scale > 0 ? 1f / scale : 1f);
-            float topInset = 28f * density * scale;
+            // 几何先在真实屏幕坐标下算（与主界面 LayoutManager 逐像素一致），再缩到画布
+            GridMetrics.PreviewGeometry g = GridMetrics.previewGeometry(realAreaW, columns,
+                    cellScale, density, getResources().getDisplayMetrics().scaledDensity, scale);
             // 首屏行数 + 一行余量；画布底部 T9 条占位不计
-            int rows = Math.max(1, (int) ((canvasH - topInset) / cellH)) + 1;
+            int rows = Math.max(1, (int) ((canvasH - g.topInset) / g.cellH)) + 1;
             int need = Math.min(shown.size(), rows * columns + columns);
 
             // 只解码需要的图标（串行即可，每张约 1-3ms）
@@ -215,18 +222,15 @@ public class ZoneEditorActivity extends AppCompatActivity {
 
             main.post(() -> {
                 if (!isDestroyed() && canvas != null) {
-                    canvas.setPreviewApps(shown, columns, scale, cellScale);
+                    canvas.setPreviewApps(shown, columns, cellScale);
                 }
             });
         });
     }
 
-    /** 预览相对主界面的缩放：画布宽 / 背景显示区实际宽（缺省退回屏幕宽） */
+    /** 预览相对主界面的缩放：画布宽 / 背景显示区实际宽 */
     private float previewScale(int canvasW) {
-        SharedPreferences bsp = getSharedPreferences(BackgroundManager.PREFS, MODE_PRIVATE);
-        int areaW = bsp.getInt(BackgroundManager.PREF_AREA_W, 0);
-        float realW = areaW > 0 ? areaW : getResources().getDisplayMetrics().widthPixels;
-        return realW > 0 ? canvasW / (float) realW : 1f;
+        return realAreaW > 0 ? canvasW / (float) realAreaW : 1f;
     }
 
     /** 与主界面 sortAllApps 相同的排序语义（数据全部来自 SP + FastCache v4 快照，零 binder） */
@@ -334,8 +338,6 @@ public class ZoneEditorActivity extends AppCompatActivity {
         private int previewColumns = 3;
         /** 预览用的格子缩放百分比，与主界面读同一个设置项 */
         private int previewCellScale = GridMetrics.DEFAULT_CELL_SCALE;
-        /** 预览相对主界面的缩放（画布宽 / 背景显示区实际宽） */
-        private float previewScale = 1f;
         private final android.text.TextPaint previewTextPaint =
                 new android.text.TextPaint(Paint.ANTI_ALIAS_FLAG);
 
@@ -371,11 +373,10 @@ public class ZoneEditorActivity extends AppCompatActivity {
         }
 
         /** 设置网格预览数据（后台线程加载完图标后主线程回调） */
-        void setPreviewApps(List<AppEntry> apps, int columns, float scale, int cellScale) {
+        void setPreviewApps(List<AppEntry> apps, int columns, int cellScale) {
             previewApps.clear();
             if (apps != null) previewApps.addAll(apps);
             previewColumns = Math.max(1, columns);
-            previewScale = scale > 0 ? scale : 1f;
             previewCellScale = cellScale;
             invalidate();
         }
@@ -450,6 +451,18 @@ public class ZoneEditorActivity extends AppCompatActivity {
             drawMatrix.postTranslate(dx, dy);
         }
 
+        /**
+         * 区域归一化坐标 → 画布像素的纵向换算。
+         *
+         * 用「背景区实测高度 × 画布缩放」而不是画布 View 的实测高度：画布高度是
+         * 取整值（极端情况下还会被容器裁切），以它为基准会让区域的上下边界与
+         * 网格行在临界位置错开一格，表现为「编辑器里避开了、主界面上没避开」。
+         * 网格本身走 {@link GridMetrics#previewGeometry}，两者因此完全同源。
+         */
+        private float pxH() {
+            return realAreaH * (getWidth() / (float) Math.max(1, realAreaW));
+        }
+
         @Override
         protected void onSizeChanged(int w, int h, int oldw, int oldh) {
             super.onSizeChanged(w, h, oldw, oldh);
@@ -469,12 +482,12 @@ public class ZoneEditorActivity extends AppCompatActivity {
                 ZoneStore.Zone z = zones.get(i);
                 boolean sel = i == selected;
                 if (z.type == ZoneStore.Zone.TYPE_CIRCLE) {
-                    float cx = z.x * getWidth(), cy = z.y * getHeight(), r = z.w * getWidth();
+                    float cx = z.x * getWidth(), cy = z.y * pxH(), r = z.w * getWidth();
                     c.drawCircle(cx, cy, r, fillPaint);
                     c.drawCircle(cx, cy, r, sel ? selStrokePaint : strokePaint);
                 } else {
-                    float l = z.x * getWidth(), t = z.y * getHeight();
-                    float r = l + z.w * getWidth(), b = t + z.h * getHeight();
+                    float l = z.x * getWidth(), t = z.y * pxH();
+                    float r = l + z.w * getWidth(), b = t + z.h * pxH();
                     c.drawRect(l, t, r, b, fillPaint);
                     c.drawRect(l, t, r, b, sel ? selStrokePaint : strokePaint);
                 }
@@ -489,27 +502,25 @@ public class ZoneEditorActivity extends AppCompatActivity {
         private void drawPreview(android.graphics.Canvas c) {
             if (previewApps.isEmpty() || getWidth() <= 0 || getHeight() <= 0) return;
             android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
-            float cellW = getWidth() / (float) previewColumns;
-            // 公式统一走 GridMetrics：画布被 previewScale 缩小过，
-            // 密度相关的留白要按 1/previewScale 换算，否则预览和主界面对不上
-            float cellH = GridMetrics.cellHeightPx(Math.round(cellW), previewCellScale,
-                    dm.density, dm.scaledDensity, previewColumns,
-                    previewScale > 0 ? 1f / previewScale : 1f);
-            float iconSize = GridMetrics.iconSizePx(Math.round(cellW), previewCellScale);
-            float padV = 6f * dm.density * previewScale;      // item_app 纵向内边距
-            float topInset = 28f * dm.density * previewScale; // 主界面顶部拉手让位
-            float textPx = GridMetrics.textSizeSp(previewColumns) * dm.scaledDensity * previewScale;
+            // 与主界面 LayoutManager 同一份真实坐标几何，整体缩到画布——
+            // 逐格位置/命中与保存后的主界面一致（见 GridMetrics.previewGeometry）
+            float ps = getWidth() / (float) realAreaW;
+            GridMetrics.PreviewGeometry g = GridMetrics.previewGeometry(realAreaW,
+                    previewColumns, previewCellScale, dm.density, dm.scaledDensity, ps);
+            float padV = 6f * dm.density * ps;      // item_app 纵向内边距
+            float textPx = GridMetrics.textSizeSp(previewColumns) * dm.scaledDensity * ps;
             previewTextPaint.setTextSize(textPx);
 
             int appIndex = 0;
             for (int row = 0; appIndex < previewApps.size(); row++) {
-                float cellTop = topInset + row * cellH;
+                float cellTop = g.topInset + row * g.cellH;
                 if (cellTop >= getHeight()) break;
                 for (int col = 0; col < previewColumns && appIndex < previewApps.size(); col++) {
-                    float cellLeft = col * cellW;
-                    if (hitAnyZone(cellLeft, cellTop, cellW, cellH)) continue; // 实时避让
+                    float cellLeft = col * g.cellW;
+                    float cw = (col == previewColumns - 1) ? g.lastColW : g.cellW;
+                    if (hitAnyZone(cellLeft, cellTop, cw, g.cellH)) continue; // 实时避让
                     drawAppCell(c, previewApps.get(appIndex), cellLeft, cellTop,
-                            cellW, cellH, iconSize, padV, textPx, dm.density);
+                            cw, g.cellH, g.iconSize, padV, textPx, dm.density, ps);
                     appIndex++;
                 }
             }
@@ -519,7 +530,7 @@ public class ZoneEditorActivity extends AppCompatActivity {
         private void drawAppCell(android.graphics.Canvas c, AppEntry e,
                                  float cellLeft, float cellTop,
                                  float cellW, float cellH, float iconSize,
-                                 float padV, float textPx, float density) {
+                                 float padV, float textPx, float density, float ps) {
             float cx = cellLeft + cellW / 2f;
             Drawable ic = e.icon;
             if (ic != null) {
@@ -529,9 +540,9 @@ public class ZoneEditorActivity extends AppCompatActivity {
                 ic.draw(c);
             }
             if (textPx > 0) {
-                float textTop = cellTop + padV + iconSize + 4f * density * previewScale;
+                float textTop = cellTop + padV + iconSize + 4f * density * ps;
                 CharSequence ell = android.text.TextUtils.ellipsize(e.label, previewTextPaint,
-                        cellW - 8f * density * previewScale, android.text.TextUtils.TruncateAt.END);
+                        cellW - 8f * density * ps, android.text.TextUtils.TruncateAt.END);
                 c.drawText(ell.toString(), cx, textTop + textPx * 0.85f, previewTextPaint);
             }
         }
@@ -541,14 +552,14 @@ public class ZoneEditorActivity extends AppCompatActivity {
             for (int i = 0; i < zones.size(); i++) {
                 ZoneStore.Zone z = zones.get(i);
                 if (z.type == ZoneStore.Zone.TYPE_CIRCLE) {
-                    float cx = z.x * getWidth(), cy = z.y * getHeight(), r = z.w * getWidth();
+                    float cx = z.x * getWidth(), cy = z.y * pxH(), r = z.w * getWidth();
                     float nx = Math.max(left, Math.min(cx, left + cw));
                     float ny = Math.max(top, Math.min(cy, top + ch));
                     float dx = cx - nx, dy = cy - ny;
                     if (dx * dx + dy * dy <= r * r) return true;
                 } else {
-                    float l = z.x * getWidth(), t = z.y * getHeight();
-                    float rr = l + z.w * getWidth(), bb = t + z.h * getHeight();
+                    float l = z.x * getWidth(), t = z.y * pxH();
+                    float rr = l + z.w * getWidth(), bb = t + z.h * pxH();
                     if (left + cw > l && left < rr && top + ch > t && top < bb) return true;
                 }
             }
@@ -622,13 +633,13 @@ public class ZoneEditorActivity extends AppCompatActivity {
             for (int i = zones.size() - 1; i >= 0; i--) {
                 ZoneStore.Zone z = zones.get(i);
                 if (z.type == ZoneStore.Zone.TYPE_CIRCLE) {
-                    float cx = z.x * getWidth(), cy = z.y * getHeight();
+                    float cx = z.x * getWidth(), cy = z.y * pxH();
                     float r = z.w * getWidth() + slop;
                     float dx = x - cx, dy = y - cy;
                     if (dx * dx + dy * dy <= r * r) return i;
                 } else {
-                    float l = z.x * getWidth() - slop, t = z.y * getHeight() - slop;
-                    float r = (z.x + z.w) * getWidth() + slop, b = (z.y + z.h) * getHeight() + slop;
+                    float l = z.x * getWidth() - slop, t = z.y * pxH() - slop;
+                    float r = (z.x + z.w) * getWidth() + slop, b = (z.y + z.h) * pxH() + slop;
                     if (x >= l && x <= r && y >= t && y <= b) return i;
                 }
             }
@@ -639,7 +650,7 @@ public class ZoneEditorActivity extends AppCompatActivity {
             ZoneStore.Zone z = getSelected();
             if (z == null) return;
             z.x = clampNorm(z.x + dx / getWidth(), 0f, 1f);
-            z.y = clampNorm(z.y + dy / getHeight(), 0f, 1f);
+            z.y = clampNorm(z.y + dy / pxH(), 0f, 1f);
         }
 
         /** 开始新建一个区域；已达上限返回 -1 */
@@ -648,7 +659,7 @@ public class ZoneEditorActivity extends AppCompatActivity {
                 Toast.makeText(getContext(), "最多 " + ZoneStore.MAX_ZONES + " 个区域", Toast.LENGTH_SHORT).show();
                 return -1;
             }
-            zones.add(new ZoneStore.Zone(newShape, downX / getWidth(), downY / getHeight(), 0.001f, 0.001f));
+            zones.add(new ZoneStore.Zone(newShape, downX / getWidth(), downY / pxH(), 0.001f, 0.001f));
             return zones.size() - 1;
         }
 
@@ -657,17 +668,17 @@ public class ZoneEditorActivity extends AppCompatActivity {
             ZoneStore.Zone z = zones.get(creatingIndex);
             if (z.type == ZoneStore.Zone.TYPE_CIRCLE) {
                 z.x = downX / getWidth();
-                z.y = downY / getHeight();
+                z.y = downY / pxH();
                 float r = (float) Math.hypot(x - downX, y - downY) / getWidth();
                 z.w = clampNorm(r, 0.03f, 0.45f);
                 z.h = 0;
             } else {
                 float l = Math.min(downX, x) / getWidth();
-                float t = Math.min(downY, y) / getHeight();
+                float t = Math.min(downY, y) / pxH();
                 z.x = clampNorm(l, 0f, 1f);
                 z.y = clampNorm(t, 0f, 1f);
                 z.w = clampNorm(Math.abs(x - downX) / getWidth(), 0.03f, 1f - z.x);
-                z.h = clampNorm(Math.abs(y - downY) / getHeight(), 0.03f, 1f - z.y);
+                z.h = clampNorm(Math.abs(y - downY) / pxH(), 0.03f, 1f - z.y);
             }
         }
 
@@ -676,14 +687,14 @@ public class ZoneEditorActivity extends AppCompatActivity {
             ZoneStore.Zone z = zones.get(creatingIndex);
             if (z.type == ZoneStore.Zone.TYPE_CIRCLE) {
                 z.x = x / getWidth();
-                z.y = y / getHeight();
+                z.y = y / pxH();
                 z.w = 0.11f;
                 z.h = 0;
             } else {
                 float w = 0.24f;
                 float h = Math.min(0.5f, w * canvasAspect());
                 z.x = clampNorm(x / getWidth() - w / 2, 0f, 1f - w);
-                z.y = clampNorm(y / getHeight() - h / 2, 0f, 1f - h);
+                z.y = clampNorm(y / pxH() - h / 2, 0f, 1f - h);
                 z.w = w;
                 z.h = h;
             }

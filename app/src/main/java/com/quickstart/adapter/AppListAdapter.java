@@ -63,6 +63,12 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
     private float iconAlpha = 1f;
     /** 角标手势模式，每次 submit 时重新读取一次，避免每个 item 重绑都查 SharedPreferences */
     private String badgeGestureMode;
+    /**
+     * 网格实际宽度（RecyclerView 实测宽），0 表示还没测量到、暂用屏幕宽兜底。
+     * 必须与 LayoutManager 铺格子用的宽度一致：小窗/分屏下屏幕宽大于列表宽，
+     * 用屏幕宽算图标会把图标撑大、与避让网格错位。
+     */
+    private int gridWidthPx;
 
     public void setOnAppClickListener(OnAppClickListener l) { this.clickListener = l; }
     public void setOnAppLongClickListener(OnAppLongClickListener l) { this.longClickListener = l; }
@@ -279,9 +285,17 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
         }
     }
 
+    /** 设置网格实际宽度（页面实测 RecyclerView 宽后调用），尺寸变化时重绑已显示格子 */
+    public void setGridWidthPx(int widthPx) {
+        if (widthPx <= 0 || widthPx == gridWidthPx) return;
+        gridWidthPx = widthPx;
+        notifyDataSetChanged();
+    }
+
     private void updateItemSquareSize(VH h) {
         android.util.DisplayMetrics dm = h.itemView.getResources().getDisplayMetrics();
-        int cellWidth = dm.widthPixels / columnCount;
+        int baseWidth = gridWidthPx > 0 ? gridWidthPx : dm.widthPixels;
+        int cellWidth = baseWidth / Math.max(1, columnCount);
         // 尺寸公式集中在 GridMetrics，避免与 LayoutManager / 避让区编辑器不一致
         int cellHeight = GridMetrics.cellHeightPx(cellWidth, cellScale,
                 dm.density, dm.scaledDensity, columnCount);

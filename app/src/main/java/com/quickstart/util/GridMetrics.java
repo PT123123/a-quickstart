@@ -18,6 +18,11 @@ import android.content.SharedPreferences;
  *  - 图标边长 = cellW * ICON_RATIO *缩放系数
  *  - 格子高度 = cellW * CELL_HEIGHT_RATIO * 缩放系数，并保证不小于「图标 + 名称」所需高度，
  *    否则名称会被EXACTLY 测量裁掉。
+ *
+ * 编辑器预览必须先用真实屏幕坐标算出同一份整数几何（{@link #previewGeometry}），
+ * 再整体乘 previewScale 画到画布上——不能拿画布尺寸直接套公式：
+ * 密度相关的留白是固定像素，在缩小后的画布上单独换算会被舍入/方向错误放大，
+ * 高密度窄屏（如 OPPO 1080p/density3）上预览行高会偏离主界面几十像素。
  */
 public final class GridMetrics {
 
@@ -32,6 +37,8 @@ public final class GridMetrics {
     public static final float ICON_RATIO = 0.65f;
     /** 格子高度占格宽的比例 */
     public static final float CELL_HEIGHT_RATIO = 1.3f;
+    /** 内容顶部留白（dp）：给主界面顶部收缩/展开拉手让位，LayoutManager 与预览共用 */
+    public static final float TOP_INSET_DP = 28f;
 
     /** item_app.xml 里纵向内边距 6dp * 2，加名称上方间距 4dp */
     private static final float TEXT_RESERVE_DP = 16f;
@@ -60,7 +67,7 @@ public final class GridMetrics {
     }
 
     /**
-     * 格子高度（像素），unitScale = 1（真实屏幕坐标）。
+     * 格子高度（像素），真实屏幕坐标。
      *
      * 除了按比例缩放，还要给「图标 + 名称」留够空间：LayoutManager 用
      * EXACTLY 高度测量 item，内容超出就会被裁。缩到 50% 时按比例算出的高度
@@ -68,26 +75,53 @@ public final class GridMetrics {
      */
     public static int cellHeightPx(int cellWidthPx, int scalePercent,
                                    float density, float scaledDensity, int columns) {
-        return cellHeightPx(cellWidthPx, scalePercent, density, scaledDensity, columns, 1f);
-    }
-
-    /**
-     * 格子高度（像素）。
-     *
-     * @param unitScale 真实像素 → 目标坐标的换算系数。
-     *   真实屏幕传 1f；避让区编辑器的预览画布被previewScale 缩小过，
-     *   那里传 1/previewScale，否则密度相关的留白会被放大而与主界面不符。
-     */
-    public static int cellHeightPx(int cellWidthPx, int scalePercent,
-                                   float density, float scaledDensity, int columns,
-                                   float unitScale) {
         if (cellWidthPx <= 0) return 0;
         int icon = iconSizePx(cellWidthPx, scalePercent);
         int scaled = Math.max(1, Math.round(cellWidthPx * CELL_HEIGHT_RATIO * scaleFactor(scalePercent)));
         float reserve = TEXT_RESERVE_DP * density
                 + textSizeSp(columns) * TEXT_LINE_FACTOR * scaledDensity;
-        int need = Math.round(icon + reserve * unitScale);
+        int need = Math.round(icon + reserve);
         return Math.max(scaled, need);
+    }
+
+    /** 内容顶部留白（像素），与主界面拉手高度一致 */
+    public static int topInsetPx(float density) {
+        return (int) (TOP_INSET_DP * density);
+    }
+
+    /**
+     * 编辑器预览画布上的格子几何（画布像素）。
+     *
+     * 先在真实屏幕坐标下算出与 AvoidGridLayoutManager 完全相同的整数几何
+     * （含最后一列吃掉整除余数），再整体乘 previewScale——预览因此是主界面的
+     * 精确等比缩影，避让命中判定逐格一致。
+     *
+     * @param areaW 背景显示区实测宽（BackgroundManager.PREF_AREA_W）
+     * @param previewScale 画布宽 / 背景显示区宽
+     */
+    public static PreviewGeometry previewGeometry(int areaW, int columns, int scalePercent,
+                                                  float density, float scaledDensity,
+                                                  float previewScale) {
+        int cellW = Math.max(1, areaW / Math.max(1, columns));
+        int cols = Math.max(1, columns);
+        int lastColW = cellW + (areaW - cellW * cols);
+        int cellH = Math.max(1, cellHeightPx(cellW, scalePercent, density, scaledDensity, cols));
+        PreviewGeometry g = new PreviewGeometry();
+        g.cellW = cellW * previewScale;
+        g.lastColW = lastColW * previewScale;
+        g.cellH = cellH * previewScale;
+        g.topInset = topInsetPx(density) * previewScale;
+        g.iconSize = iconSizePx(cellW, scalePercent) * previewScale;
+        return g;
+    }
+
+    /** 预览画布坐标下的格子几何，见 {@link #previewGeometry} */
+    public static final class PreviewGeometry {
+        public float cellW;
+        public float lastColW;
+        public float cellH;
+        public float topInset;
+        public float iconSize;
     }
 
     /** 名称字号（sp）：随列数递减，列数越多格子越窄，字要跟着小才放得下 */

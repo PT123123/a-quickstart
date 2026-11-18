@@ -88,6 +88,8 @@ public class CategoryPageFragment extends Fragment {
         if (recycler != null) {
             recycler.setAdapter(sharedAdapter);
             applyColumnCount();
+            // 页面已布局过（如切换适配器）时立即同步实际宽度，避免沿用屏幕宽兜底
+            if (recycler.getWidth() > 0) sharedAdapter.setGridWidthPx(recycler.getWidth());
         }
     }
 
@@ -204,6 +206,15 @@ public class CategoryPageFragment extends Fragment {
         View root = inflater.inflate(R.layout.item_category_page, container, false);
         recycler = root.findViewById(R.id.page_recycler);
         recycler.setLayoutManager(buildLayoutManager());
+        // 格子尺寸必须以列表实际宽为准（与 LayoutManager 铺格子同一宽度）：
+        // 小窗/分屏/折叠屏展开时屏幕宽 ≠ 列表宽，用屏幕宽会把图标撑大、和避让区域错位
+        recycler.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            if (r - l == or - ol || r - l <= 0) return;
+            final int width = r - l;
+            v.post(() -> {
+                if (adapter != null) adapter.setGridWidthPx(width);
+            });
+        });
         applyAnimatorToRecycler(pendingAnimatorValue);
         if (adapter != null) {
             recycler.setAdapter(adapter);
@@ -253,7 +264,7 @@ public class CategoryPageFragment extends Fragment {
     private AvoidGridLayoutManager buildLayoutManager() {
         AvoidGridLayoutManager lm = new AvoidGridLayoutManager(requireContext(), columnCount);
         lm.setCellScale(cellScale);
-        lm.setTopInsetPx((int) (28 * getResources().getDisplayMetrics().density));
+        lm.setTopInsetPx(GridMetrics.topInsetPx(getResources().getDisplayMetrics().density));
         loadZonesInto(lm);
         return lm;
     }

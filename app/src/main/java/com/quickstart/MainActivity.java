@@ -183,6 +183,12 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         topPanel   = findViewById(R.id.top_panel);
         toggleTop  = findViewById(R.id.btn_toggle_top);
 
+        // 列表区尺寸变化（分屏/小窗/折叠展开/键盘高度调整）时重测背景区参考尺寸：
+        // 避让区域编辑器与主界面避让都按这份宽高换算，必须始终同步
+        viewPager.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            if (r - l != or - ol || b - t != ob - ot) measureBackgroundArea();
+        });
+
         // 快跳过无障碍服务未开启时的低调提示图标（点击前往系统无障碍设置）
         accessibilityHint = findViewById(R.id.accessibility_hint);
         if (accessibilityHint != null) {
