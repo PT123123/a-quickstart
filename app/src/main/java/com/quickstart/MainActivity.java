@@ -5,7 +5,11 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Bundle;
@@ -80,6 +84,9 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
     private AppListAdapter adapter;
     /** 背景图片层：自动反色/底衬要按它的实际显示区域换算亮度 */
     private ImageView bgImageView;
+    /** 磨砂玻璃绘制用（带双线性过滤，放大模糊图保持平滑） */
+    private final Paint backdropPaint = new Paint(Paint.ANTI_ALIAS_FLAG
+            | Paint.FILTER_BITMAP_FLAG);
     /** 快跳过无障碍服务未开启时显示的提示图标（T9 显示条右缘） */
     private ImageView accessibilityHint;
 
@@ -214,6 +221,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
 
         adapter = new AppListAdapter();
         adapter.setLuminanceProvider(this::luminanceFor);
+        adapter.setBackdropRenderer(this::drawBackdrop);
         adapter.setOnAppClickListener(this::launchApp);
         adapter.setOnAppLongClickListener(this::showAppMenu);
 
@@ -227,6 +235,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         for (int i = 0; i < getPageCount(); i++) {
             AppListAdapter pageAdapter = new AppListAdapter();
             pageAdapter.setLuminanceProvider(this::luminanceFor);
+            pageAdapter.setBackdropRenderer(this::drawBackdrop);
             pageAdapter.setOnAppClickListener(this::launchApp);
             pageAdapter.setOnAppLongClickListener(this::showAppMenu);
             pageAdapter.setColumnCount(columnCount);
@@ -1429,6 +1438,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         String imagePath = sp.getString(BackgroundManager.PREF_IMAGE, "");
         if (imagePath.isEmpty()) {
             bgImage.setImageDrawable(null);
+            Contrast.updateBackdrop(null);
             refreshReadability();
             return;
         }
@@ -1439,6 +1449,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                 main.post(() -> {
                     if (!isDestroyed()) {
                         bgImage.setImageDrawable(null);
+                        Contrast.updateBackdrop(null);
                         refreshReadability();
                     }
                 });
@@ -1452,8 +1463,9 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                 h = dm.heightPixels;
             }
             Bitmap bmp = BackgroundManager.decodeSampled(file, w, h);
-            // 亮度网格与背景图同源：换了壁纸/模糊档位后，文字取色立即跟着更新
+            // 亮度网格与模糊副本都与背景图同源：换壁纸/模糊档位后，取色和磨砂底衬立即更新
             Contrast.updateFromBitmap(bmp);
+            Contrast.updateBackdrop(bmp);
             main.post(() -> {
                 if (!isDestroyed()) {
                     bgImage.setImageBitmap(bmp);
@@ -1621,6 +1633,53 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         float fx = (cx - bgLoc[0] - (viewW - dispW) / 2f) / dispW;
         float fy = (cy - bgLoc[1] - (viewH - dispH) / 2f) / dispH;
         return Contrast.sample(fx, fy);
+    }
+
+    /**
+     * 磨砂玻璃底衬：把目标 View 背后对应的模糊背景，画到它自己的局部坐标里。
+     * 映射与 {@link #luminanceFor(View)} 完全同一套 centerCrop 几何。
+     */
+    private boolean drawBackdrop(Canvas canvas, View target, float growPx) {
+        Bitmap bmp = Contrast.getBackdrop();
+        if (canvas == null || target == null || bmp == null || bmp.isRecycled()) return false;
+        ImageView bg = bgImageView != null ? bgImageView : findViewById(R.id.bg_image);
+        if (bg == null) return false;
+        Drawable d = bg.getDrawable();
+        if (d == null || bg.getWidth() <= 0 || bg.getHeight() <= 0) return false;
+        int dw = d.getIntrinsicWidth();
+        int dh = d.getIntrinsicHeight();
+        if (dw <= 0 || dh <= 0) return false;
+
+        int[] bgLoc = new int[2];
+        int[] targetLoc = new int[2];
+        bg.getLocationOnScreen(bgLoc);
+        target.getLocationOnScreen(targetLoc);
+        float viewW = bg.getWidth();
+        float viewH = bg.getHeight();
+        float scale = Math.max(viewW / dw, viewH / dh);
+        float dispW = dw * scale;
+        float dispH = dh * scale;
+        float offX = bgLoc[0] + (viewW - dispW) / 2f;
+        float offY = bgLoc[1] + (viewH - dispH) / 2f;
+
+        int bw = bmp.getWidth();
+        int bh = bmp.getHeight();
+        int x0 = clampInt(Math.round((targetLoc[0] - growPx - offX) / dispW * bw), 0, bw - 1);
+        int y0 = clampInt(Math.round((targetLoc[1] - growPx - offY) / dispH * bh), 0, bh - 1);
+        int x1 = clampInt(Math.round((targetLoc[0] + target.getWidth() + growPx - offX) / dispW * bw),
+                x0 + 1, bw);
+        int y1 = clampInt(Math.round((targetLoc[1] + target.getHeight() + growPx - offY) / dispH * bh),
+                y0 + 1, bh);
+
+        Rect src = new Rect(x0, y0, x1, y1);
+        RectF dst = new RectF(-growPx, -growPx,
+                target.getWidth() + growPx, target.getHeight() + growPx);
+        canvas.drawBitmap(bmp, src, dst, backdropPaint);
+        return true;
+    }
+
+    private static int clampInt(int v, int lo, int hi) {
+        return v < lo ? lo : (v > hi ? hi : v);
     }
 
     /** 应用列数设置（列数改变即时生效） */

@@ -4,8 +4,10 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.RadialGradient;
 import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.ShapeDrawable;
@@ -53,6 +55,11 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
         float luminanceFor(View target);
     }
 
+    /** 磨砂玻璃底衬：把目标 View 背后的背景（已模糊）画到它自己的局部坐标里 */
+    public interface BackdropRenderer {
+        boolean drawBackdrop(Canvas canvas, View target, float growPx);
+    }
+
     private static final int HIGHLIGHT_COLOR = Color.parseColor("#1565C0");
     /** 图标异步加载线程池：静态共享，避免每次创建 Adapter 都新开 4 个线程 */
     private static final ExecutorService ICON_EXECUTOR = Executors.newFixedThreadPool(4);
@@ -90,9 +97,10 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
     /** 图标柔化底衬：给（透明底）图标加一圈柔化光晕 */
     private boolean iconBackdrop;
     private LuminanceProvider luminanceProvider;
+    private BackdropRenderer backdropRenderer;
 
-    /** 底衬 Drawable 缓存，避免每个格子/每次滚动都新建 */
-    private Drawable scrimLight, scrimDark, discLight, discDark;
+    /** 图标柔化光晕 Drawable 缓存，避免每个格子都新建 */
+    private Drawable discLight, discDark;
 
     public void setOnAppClickListener(OnAppClickListener l) { this.clickListener = l; }
     public void setOnAppLongClickListener(OnAppLongClickListener l) { this.longClickListener = l; }
@@ -110,6 +118,9 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
 
     /** 背景亮度提供者：由宿主注入（按目标 View 的屏幕位置查背景亮度） */
     public void setLuminanceProvider(LuminanceProvider p) { this.luminanceProvider = p; }
+
+    /** 磨砂玻璃绘制器：由宿主注入（用背景图的模糊副本填充底衬） */
+    public void setBackdropRenderer(BackdropRenderer r) { this.backdropRenderer = r; }
 
     /** 可读性开关：文字自动反色 / 文字虚化底衬 / 图标柔化底衬 */
     public void setReadability(boolean autoContrast, boolean textScrim, boolean iconBackdrop) {
@@ -305,7 +316,13 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
         }
 
         if (textScrim) {
-            h.name.setBackground(lightText ? darkScrim(h) : lightScrim(h));
+            // 磨砂玻璃：底衬用「背景图的模糊副本 + 低透明度染色」，不是一整块白色
+            int tint = lightText ? 0x40000000 : 0x38FFFFFF;
+            if (h.scrimDrawable == null || h.scrimTint != tint) {
+                h.scrimTint = tint;
+                h.scrimDrawable = new GlassScrimDrawable(h.name, tint, dp(h, 10));
+            }
+            h.name.setBackground(h.scrimDrawable);
             int ph = dp(h, 6);
             int pv = dp(h, 1);
             h.name.setPadding(ph, pv, ph, pv);
@@ -341,18 +358,6 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
         return Math.round(value * h.itemView.getResources().getDisplayMetrics().density);
     }
 
-    /** 文字底衬：浅色文字配深色柔化底 */
-    private Drawable darkScrim(VH h) {
-        if (scrimDark == null) scrimDark = new SoftScrimDrawable(0xC9000000, dp(h, 10));
-        return scrimDark;
-    }
-
-    /** 文字底衬：深色文字配浅色柔化底 */
-    private Drawable lightScrim(VH h) {
-        if (scrimLight == null) scrimLight = new SoftScrimDrawable(0xD9FFFFFF, dp(h, 10));
-        return scrimLight;
-    }
-
     /** 图标柔化光晕：浅色（深色背景上用） */
     private Drawable lightDisc() {
         if (discLight == null) discLight = softDisc(0x59FFFFFF);
@@ -380,31 +385,54 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
         return sd;
     }
 
-    /** 柔化圆角底衬：多层同心圆角矩形叠加，视觉上接近虚化边缘（比逐帧真模糊便宜几个数量级） */
-    private static final class SoftScrimDrawable extends Drawable {
-        private static final float[] GROW = {1.0f, 0.7f, 0.35f, 0f};
-        private static final float[] ALPHA = {0.10f, 0.22f, 0.45f, 1f};
+    /**
+     * 磨砂玻璃底衬：圆角裁切后先画「目标位置对应的模糊背景」，再盖一层低透明度染色。
+     * 背景本身是预先模糊好的小图，滚动时只是放大绘制一块，不做实时模糊。
+     * 没有图片背景（纯色）时退化为多层低透明度圆角矩形，仍有柔化边缘。
+     */
+    private final class GlassScrimDrawable extends Drawable {
+        private static final int EDGE_STEPS = 3;
 
-        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final int color;
+        private final TextView host;
+        private final int tint;
         private final float radius;
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        private final RectF rect = new RectF();
+        private final Path clip = new Path();
 
-        SoftScrimDrawable(int color, float radius) {
-            this.color = color;
+        GlassScrimDrawable(TextView host, int tint, float radius) {
+            this.host = host;
+            this.tint = tint;
             this.radius = radius;
         }
 
         @Override
         public void draw(@NonNull Canvas canvas) {
             Rect b = getBounds();
-            int baseAlpha = Color.alpha(color);
-            int rgb = color & 0x00FFFFFF;
-            for (int i = 0; i < GROW.length; i++) {
-                float grow = radius * GROW[i] * 0.45f;
-                paint.setColor((Math.round(baseAlpha * ALPHA[i]) << 24) | rgb);
-                float r = radius + grow;
-                canvas.drawRoundRect(b.left - grow, b.top - grow,
-                        b.right + grow, b.bottom + grow, r, r, paint);
+            rect.set(b);
+            clip.reset();
+            clip.addRoundRect(rect, radius, radius, Path.Direction.CW);
+            int save = canvas.save();
+            canvas.clipPath(clip);
+            boolean drew = backdropRenderer != null
+                    && backdropRenderer.drawBackdrop(canvas, host, radius * 0.2f);
+            paint.setShader(null);
+            paint.setColor(tint);
+            canvas.drawRect(rect, paint);
+            canvas.restoreToCount(save);
+
+            if (!drew) {
+                // 纯色背景：没有可画的模糊图，用外扩的几层低透明染色柔化边缘
+                int baseAlpha = Color.alpha(tint);
+                int rgb = tint & 0x00FFFFFF;
+                for (int i = EDGE_STEPS; i >= 1; i--) {
+                    float grow = radius * 0.3f * i;
+                    int alpha = Math.round(baseAlpha * 0.16f * (EDGE_STEPS - i + 1));
+                    paint.setColor((alpha << 24) | rgb);
+                    float r = radius + grow;
+                    canvas.drawRoundRect(b.left - grow, b.top - grow,
+                            b.right + grow, b.bottom + grow, r, r, paint);
+                }
             }
         }
 
@@ -620,6 +648,9 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
         int baseTextColor = Color.BLACK;
         /** 上次应用的可读性状态位，没变就跳过（滚动时高频调用） */
         int lastReadState = Integer.MIN_VALUE;
+        /** 磨砂玻璃底衬（每个 holder 一份，绘制时要拿到自己的屏幕位置） */
+        Drawable scrimDrawable;
+        int scrimTint;
 
         VH(@NonNull View itemView) {
             super(itemView);

@@ -26,8 +26,32 @@ public final class Contrast {
     private static volatile int gridH;
     /** 纯色/无图背景的亮度；-1 表示未知 */
     private static volatile float solidLuminance = -1f;
+    /** 背景图的模糊副本（磨砂玻璃底衬用），尺寸很小，滚动时按需取一块放大绘制 */
+    private static volatile Bitmap backdrop;
 
     private Contrast() {
+    }
+
+    /** 磨砂玻璃用的模糊背景；没有图片背景时为 null */
+    public static Bitmap getBackdrop() {
+        return backdrop;
+    }
+
+    /** 重建模糊背景副本（可在后台线程调用）；传 null 表示清除 */
+    public static void updateBackdrop(Bitmap src) {
+        if (src == null || src.isRecycled() || src.getWidth() <= 0 || src.getHeight() <= 0) {
+            backdrop = null;
+            return;
+        }
+        int sw = 240;
+        int sh = Math.max(1, Math.round(sw * src.getHeight() / (float) src.getWidth()));
+        Bitmap small = Bitmap.createScaledBitmap(src, sw, sh, true);
+        if (small == null) return;
+        // 小图上模糊，放大后依然平滑，滚动时零计算
+        Bitmap blurred = BackgroundManager.blur(small, 10);
+        if (small != src && small != blurred) small.recycle();
+        if (blurred != null && blurred != src) backdrop = blurred;
+        else if (blurred == small) backdrop = small;
     }
 
     /** 用当前显示的背景位图重建亮度网格（可在后台线程调用） */
