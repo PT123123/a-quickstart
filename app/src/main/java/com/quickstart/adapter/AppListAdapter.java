@@ -1,6 +1,7 @@
 package com.quickstart.adapter;
 
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -55,9 +56,9 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
         float luminanceFor(View target);
     }
 
-    /** 磨砂玻璃底衬：把目标 View 背后的背景（已模糊）画到它自己的局部坐标里 */
+    /** 磨砂玻璃底衬：返回目标 View 背后对应的模糊图区域；null 表示没有可用背景 */
     public interface BackdropRenderer {
-        boolean drawBackdrop(Canvas canvas, View target, float growPx);
+        Bitmap backdropFor(View target, float growPx, Rect outSrc);
     }
 
     private static final int HIGHLIGHT_COLOR = Color.parseColor("#1565C0");
@@ -317,7 +318,7 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
 
         if (textScrim) {
             // 磨砂玻璃：底衬用「背景图的模糊副本 + 低透明度染色」，不是一整块白色
-            int tint = lightText ? 0x40000000 : 0x38FFFFFF;
+            int tint = lightText ? 0x21000000 : 0x21FFFFFF;
             if (h.scrimDrawable == null || h.scrimTint != tint) {
                 h.scrimTint = tint;
                 h.scrimDrawable = new GlassScrimDrawable(h.name, tint, dp(h, 10));
@@ -326,9 +327,9 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
             int ph = dp(h, 6);
             int pv = dp(h, 1);
             h.name.setPadding(ph, pv, ph, pv);
-            // 极轻的同色阴影向外柔化，让底衬与文字更像「糊在一起」而不是硬边
+            // 很轻的同色阴影，避免文字像贴上去一样硬
             h.name.setShadowLayer(dp(h, 2), 0, 0,
-                    lightText ? 0x66000000 : 0x66FFFFFF);
+                    lightText ? 0x4D000000 : 0x4DFFFFFF);
         } else {
             h.name.setBackground(null);
             h.name.setPadding(0, 0, 0, 0);
@@ -360,13 +361,13 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
 
     /** 图标柔化光晕：浅色（深色背景上用） */
     private Drawable lightDisc() {
-        if (discLight == null) discLight = softDisc(0x59FFFFFF);
+        if (discLight == null) discLight = softDisc(0x4DFFFFFF);
         return discLight;
     }
 
     /** 图标柔化光晕：深色（浅色背景上用） */
     private Drawable darkDisc() {
-        if (discDark == null) discDark = softDisc(0x33000000);
+        if (discDark == null) discDark = softDisc(0x2B000000);
         return discDark;
     }
 
@@ -386,53 +387,64 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
     }
 
     /**
-     * 磨砂玻璃底衬：圆角裁切后先画「目标位置对应的模糊背景」，再盖一层低透明度染色。
-     * 背景本身是预先模糊好的小图，滚动时只是放大绘制一块，不做实时模糊。
-     * 没有图片背景（纯色）时退化为多层低透明度圆角矩形，仍有柔化边缘。
+     * 磨砂玻璃底衬：用「背景图对应位置的模糊副本」做填充，再叠一层很轻的染色。
+     *
+     * 边缘柔化：从外到内画 5 层逐渐缩小、逐渐不透明的圆角区域，
+     * 每层都用「模糊图 × 层透明度」和「染色 × 层透明度」叠加。
+     * 最外层几乎是透明的，所以底衬和背景之间没有可辨认的硬边界；
+     * 中心层才接近完全不透明，保证文字下面有足够的模糊玻璃。
      */
     private final class GlassScrimDrawable extends Drawable {
-        private static final int EDGE_STEPS = 3;
+        /** 由外到内：外扩比例（相对羽毛宽度）与层不透明度系数 */
+        private static final float[] FEATHER = {1.0f, 0.75f, 0.5f, 0.25f, 0f};
+        private static final float[] LAYER_ALPHA = {0.03f, 0.07f, 0.14f, 0.25f, 0.4f};
 
         private final TextView host;
         private final int tint;
         private final float radius;
-        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        private final Paint bmpPaint = new Paint(Paint.ANTI_ALIAS_FLAG
+                | Paint.FILTER_BITMAP_FLAG);
+        private final Paint tintPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF rect = new RectF();
+        private final Rect src = new Rect();
         private final Path clip = new Path();
 
         GlassScrimDrawable(TextView host, int tint, float radius) {
             this.host = host;
             this.tint = tint;
             this.radius = radius;
+            tintPaint.setColor(tint);
         }
 
         @Override
         public void draw(@NonNull Canvas canvas) {
             Rect b = getBounds();
-            rect.set(b);
-            clip.reset();
-            clip.addRoundRect(rect, radius, radius, Path.Direction.CW);
-            int save = canvas.save();
-            canvas.clipPath(clip);
-            boolean drew = backdropRenderer != null
-                    && backdropRenderer.drawBackdrop(canvas, host, radius * 0.2f);
-            paint.setShader(null);
-            paint.setColor(tint);
-            canvas.drawRect(rect, paint);
-            canvas.restoreToCount(save);
+            float feather = radius * 1.2f;
+            // 只取一次背景区域：五层共用同一块模糊图，靠裁剪与透明度淡出边缘
+            Bitmap bmp = backdropRenderer != null
+                    ? backdropRenderer.backdropFor(host, feather, src) : null;
+            int baseAlpha = Color.alpha(tint);
 
-            if (!drew) {
-                // 纯色背景：没有可画的模糊图，用外扩的几层低透明染色柔化边缘
-                int baseAlpha = Color.alpha(tint);
-                int rgb = tint & 0x00FFFFFF;
-                for (int i = EDGE_STEPS; i >= 1; i--) {
-                    float grow = radius * 0.3f * i;
-                    int alpha = Math.round(baseAlpha * 0.16f * (EDGE_STEPS - i + 1));
-                    paint.setColor((alpha << 24) | rgb);
-                    float r = radius + grow;
-                    canvas.drawRoundRect(b.left - grow, b.top - grow,
-                            b.right + grow, b.bottom + grow, r, r, paint);
+            for (int i = 0; i < FEATHER.length; i++) {
+                float grow = feather * FEATHER[i];
+                float r = radius + grow;
+                rect.set(b.left - grow, b.top - grow, b.right + grow, b.bottom + grow);
+                clip.reset();
+                clip.addRoundRect(rect, r, r, Path.Direction.CW);
+                int save = canvas.save();
+                canvas.clipPath(clip);
+
+                int alpha = Math.round(255 * LAYER_ALPHA[i]);
+                if (bmp != null && !bmp.isRecycled()) {
+                    bmpPaint.setAlpha(alpha);
+                    RectF dst = new RectF(-feather, -feather,
+                            host.getWidth() + feather, host.getHeight() + feather);
+                    canvas.drawBitmap(bmp, src, dst, bmpPaint);
                 }
+                // 染色也按层淡出，避免留下明显的一圈边
+                tintPaint.setAlpha(Math.round(baseAlpha * LAYER_ALPHA[i]));
+                canvas.drawRect(rect, tintPaint);
+                canvas.restoreToCount(save);
             }
         }
 
@@ -443,7 +455,8 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
 
         @Override
         public void setColorFilter(android.graphics.ColorFilter colorFilter) {
-            paint.setColorFilter(colorFilter);
+            tintPaint.setColorFilter(colorFilter);
+            bmpPaint.setColorFilter(colorFilter);
         }
 
         @Override
