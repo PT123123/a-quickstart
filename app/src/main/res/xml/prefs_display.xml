@@ -45,10 +45,28 @@
         android:entries="@array/icon_layer_entries"
         android:entryValues="@array/icon_layer_values" />
 
+    <SwitchPreferenceCompat
+        android:key="text_auto_contrast"
+        android:title="文字自动反色"
+        android:summary="按文字背后背景的明暗自动改用黑字或白字，花哨背景上也能看清应用名称"
+        android:defaultValue="false" />
+
+    <SwitchPreferenceCompat
+        android:key="text_scrim"
+        android:title="文字虚化底衬"
+        android:summary="在应用名称后加一层柔化的半透明底衬（浅色字配深底、深色字配浅底），复杂背景下更容易辨认"
+        android:defaultValue="false" />
+
+    <SwitchPreferenceCompat
+        android:key="icon_backdrop"
+        android:title="图标柔化底衬"
+        android:summary="在透明背景的图标后加一圈柔化光晕，避免图标和背景图案混在一起"
+        android:defaultValue="false" />
+
     <Preference
         android:key="font_color"
         android:title="字体颜色"
-        android:summary="点击切换应用名称字体颜色" />
+        android:summary="点击切换应用名称字体颜色（开启「文字自动反色」时以自动判断为准）" />
 
     <Preference
         android:key="background_color"

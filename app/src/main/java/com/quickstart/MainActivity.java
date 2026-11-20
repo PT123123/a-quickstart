@@ -6,6 +6,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -40,6 +41,7 @@ import com.quickstart.model.AppEntry;
 import com.quickstart.util.AppLoader;
 import com.quickstart.util.BackgroundManager;
 import com.quickstart.util.CategoryConfig;
+import com.quickstart.util.Contrast;
 import com.quickstart.util.FastCache;
 import com.quickstart.util.GridMetrics;
 import com.quickstart.util.IconCache;
@@ -76,6 +78,8 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
     private View topPanel;
     private TextView toggleTop;
     private AppListAdapter adapter;
+    /** 背景图片层：自动反色/底衬要按它的实际显示区域换算亮度 */
+    private ImageView bgImageView;
     /** 快跳过无障碍服务未开启时显示的提示图标（T9 显示条右缘） */
     private ImageView accessibilityHint;
 
@@ -167,6 +171,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
             pendingQueryClear = savedInstanceState.getBoolean("pending_query_clear", false);
         }
         setContentView(R.layout.activity_main);
+        bgImageView = findViewById(R.id.bg_image);
         // 必须在任何图标加载/读缓存之前设置：外观模式决定图标渲染路径，
         // 晚设会让先读到的缓存是旧模式的图
         applyIconLayerMode();
@@ -208,6 +213,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                 setTopPanelExpanded(topPanel.getVisibility() != View.VISIBLE));
 
         adapter = new AppListAdapter();
+        adapter.setLuminanceProvider(this::luminanceFor);
         adapter.setOnAppClickListener(this::launchApp);
         adapter.setOnAppLongClickListener(this::showAppMenu);
 
@@ -220,6 +226,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         refreshCategoryTabs();
         for (int i = 0; i < getPageCount(); i++) {
             AppListAdapter pageAdapter = new AppListAdapter();
+            pageAdapter.setLuminanceProvider(this::luminanceFor);
             pageAdapter.setOnAppClickListener(this::launchApp);
             pageAdapter.setOnAppLongClickListener(this::showAppMenu);
             pageAdapter.setColumnCount(columnCount);
@@ -268,6 +275,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         // 依赖 adapter，必须在其初始化之后调用
         applyFontColor();
         applyIconTransparency();
+        applyReadabilitySettings();
 
         sortLabel.setOnClickListener(v -> showSortMenu());
 
@@ -1399,6 +1407,19 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
             }
         }
         if (bgContainer != null) bgContainer.setBackgroundColor(color);
+
+        // 纯色背景的亮度：透明色表示跟随主题，按深/浅色主题估一个值
+        float solidLum;
+        if (Color.alpha(color) == 0) {
+            boolean night = (getResources().getConfiguration().uiMode
+                    & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+                    == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+            solidLum = night ? 0.03f : 0.95f;
+        } else {
+            solidLum = Contrast.luminance(color);
+        }
+        Contrast.setSolidLuminance(solidLum);
+
         if (bgImage == null) return;
 
         // 背景层尺寸固定为参考尺寸，键盘收起时不再被拉伸
@@ -1408,6 +1429,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         String imagePath = sp.getString(BackgroundManager.PREF_IMAGE, "");
         if (imagePath.isEmpty()) {
             bgImage.setImageDrawable(null);
+            refreshReadability();
             return;
         }
         final String mode = sp.getString(BackgroundManager.PREF_BLUR, BackgroundManager.NONE);
@@ -1415,7 +1437,10 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
             File file = BackgroundManager.getDisplayFile(MainActivity.this, mode);
             if (file == null) {
                 main.post(() -> {
-                    if (!isDestroyed()) bgImage.setImageDrawable(null);
+                    if (!isDestroyed()) {
+                        bgImage.setImageDrawable(null);
+                        refreshReadability();
+                    }
                 });
                 return;
             }
@@ -1427,10 +1452,21 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                 h = dm.heightPixels;
             }
             Bitmap bmp = BackgroundManager.decodeSampled(file, w, h);
+            // 亮度网格与背景图同源：换了壁纸/模糊档位后，文字取色立即跟着更新
+            Contrast.updateFromBitmap(bmp);
             main.post(() -> {
-                if (!isDestroyed()) bgImage.setImageBitmap(bmp);
+                if (!isDestroyed()) {
+                    bgImage.setImageBitmap(bmp);
+                    refreshReadability();
+                }
             });
         });
+    }
+
+    /** 背景亮度网格变了：让列表按新背景重新取色 */
+    private void refreshReadability() {
+        if (adapter != null) adapter.invalidateContrast();
+        for (AppListAdapter a : pageAdapters) a.invalidateContrast();
     }
 
     /**
@@ -1541,6 +1577,52 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
         updateAllFragments(f -> f.setIconAlpha(alpha));
     }
 
+    /** 应用可读性开关：文字自动反色 / 文字虚化底衬 / 图标柔化底衬 */
+    private void applyReadabilitySettings() {
+        SharedPreferences sp = getSharedPreferences("settings", MODE_PRIVATE);
+        boolean autoContrast = sp.getBoolean("text_auto_contrast", false);
+        boolean textScrim = sp.getBoolean("text_scrim", false);
+        boolean iconBackdrop = sp.getBoolean("icon_backdrop", false);
+        adapter.setReadability(autoContrast, textScrim, iconBackdrop);
+        for (AppListAdapter a : pageAdapters) {
+            a.setReadability(autoContrast, textScrim, iconBackdrop);
+        }
+    }
+
+    /**
+     * 背景亮度提供者：把目标 View 的中心映射到背景图的实际显示区域（centerCrop），
+     * 再查 {@link Contrast} 的亮度网格。返回 -1 表示未知（无背景图或尚未布局）。
+     */
+    private float luminanceFor(View target) {
+        if (target == null) return -1f;
+        ImageView bg = bgImageView != null ? bgImageView : findViewById(R.id.bg_image);
+        if (bg == null) return Contrast.getSolidLuminance();
+        Drawable d = bg.getDrawable();
+        if (d == null || bg.getWidth() <= 0 || bg.getHeight() <= 0) {
+            return Contrast.getSolidLuminance();
+        }
+        int dw = d.getIntrinsicWidth();
+        int dh = d.getIntrinsicHeight();
+        if (dw <= 0 || dh <= 0) return Contrast.getSolidLuminance();
+
+        int[] bgLoc = new int[2];
+        int[] targetLoc = new int[2];
+        bg.getLocationOnScreen(bgLoc);
+        target.getLocationOnScreen(targetLoc);
+        float cx = targetLoc[0] + target.getWidth() / 2f;
+        float cy = targetLoc[1] + target.getHeight() / 2f;
+
+        float viewW = bg.getWidth();
+        float viewH = bg.getHeight();
+        // 与 bg_image 的 scaleType=centerCrop 一致：按较大比例铺满，再居中裁切
+        float scale = Math.max(viewW / dw, viewH / dh);
+        float dispW = dw * scale;
+        float dispH = dh * scale;
+        float fx = (cx - bgLoc[0] - (viewW - dispW) / 2f) / dispW;
+        float fy = (cy - bgLoc[1] - (viewH - dispH) / 2f) / dispH;
+        return Contrast.sample(fx, fy);
+    }
+
     /** 应用列数设置（列数改变即时生效） */
     private void applyColumnCount() {
         int columnCount = getColumnCount();
@@ -1630,6 +1712,9 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
                 + "|" + sp.getString("font_color", "")
                 + "|" + sp.getInt("icon_transparency", 60)
                 + "|" + sp.getBoolean("recent_app_dot", true)
+                + "|" + sp.getBoolean("text_auto_contrast", false)
+                + "|" + sp.getBoolean("text_scrim", false)
+                + "|" + sp.getBoolean("icon_backdrop", false)
                 + "|" + sp.getString("list_animation", "off")
                 + "|" + sp.getString("key_gesture", "long_press")
                 + "|" + sp.getBoolean("avoid_follow_scroll", false)
@@ -1705,6 +1790,7 @@ public class MainActivity extends AppCompatActivity implements CategoryPageFragm
             applyCellScale();
             applyFontColor();
             applyIconTransparency();
+            applyReadabilitySettings();
             applyRecentDot();
             applyListAnimationSetting();
             applyAvoidZones();

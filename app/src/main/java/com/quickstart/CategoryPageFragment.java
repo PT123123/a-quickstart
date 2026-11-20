@@ -206,13 +206,24 @@ public class CategoryPageFragment extends Fragment {
         View root = inflater.inflate(R.layout.item_category_page, container, false);
         recycler = root.findViewById(R.id.page_recycler);
         recycler.setLayoutManager(buildLayoutManager());
+        // 背景固定、格子随滚动移动：开了自动反色/底衬时，滚动后文字背后的明暗会变，
+        // 这里每帧按可见格子的新位置重新取色（状态没变时 Adapter 内部会直接跳过）
+        recycler.addOnScrollListener(new RecyclerView.OnScrollListener() {
+            @Override
+            public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
+                if (adapter != null) adapter.refreshVisibleContrast(rv);
+            }
+        });
         // 格子尺寸必须以列表实际宽为准（与 LayoutManager 铺格子同一宽度）：
         // 小窗/分屏/折叠屏展开时屏幕宽 ≠ 列表宽，用屏幕宽会把图标撑大、和避让区域错位
         recycler.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
-            if (r - l == or - ol || r - l <= 0) return;
+            if (r - l == or - ol && b - t == ob - ot) return;
             final int width = r - l;
             v.post(() -> {
                 if (adapter != null) adapter.setGridWidthPx(width);
+                if (adapter != null && recycler != null) {
+                    adapter.refreshVisibleContrast(recycler);
+                }
             });
         });
         applyAnimatorToRecycler(pendingAnimatorValue);

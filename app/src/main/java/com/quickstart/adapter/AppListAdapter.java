@@ -1,8 +1,15 @@
 package com.quickstart.adapter;
 
 import android.content.Context;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.RadialGradient;
+import android.graphics.Rect;
+import android.graphics.Shader;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.ShapeDrawable;
+import android.graphics.drawable.shapes.OvalShape;
 import android.text.Spannable;
 import android.text.SpannableString;
 import android.text.style.ForegroundColorSpan;
@@ -19,6 +26,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.quickstart.R;
 import com.quickstart.model.AppEntry;
 import com.quickstart.util.AppLoader;
+import com.quickstart.util.Contrast;
 import com.quickstart.util.GridMetrics;
 
 import java.util.ArrayList;
@@ -38,6 +46,11 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
     /** 角标手势触发回调：position 是列表中的位置 */
     public interface OnBadgeGestureListener {
         void onBadgeGesture(int position);
+    }
+
+    /** 背景亮度提供者：返回某个 View 中心处背景的相对亮度（0~1），未知返回 -1 */
+    public interface LuminanceProvider {
+        float luminanceFor(View target);
     }
 
     private static final int HIGHLIGHT_COLOR = Color.parseColor("#1565C0");
@@ -70,6 +83,17 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
      */
     private int gridWidthPx;
 
+    /** 文字自动反色：按背后背景明暗自动用黑字/白字 */
+    private boolean autoContrast;
+    /** 文字虚化底衬：文字后加柔化半透明底 */
+    private boolean textScrim;
+    /** 图标柔化底衬：给（透明底）图标加一圈柔化光晕 */
+    private boolean iconBackdrop;
+    private LuminanceProvider luminanceProvider;
+
+    /** 底衬 Drawable 缓存，避免每个格子/每次滚动都新建 */
+    private Drawable scrimLight, scrimDark, discLight, discDark;
+
     public void setOnAppClickListener(OnAppClickListener l) { this.clickListener = l; }
     public void setOnAppLongClickListener(OnAppLongClickListener l) { this.longClickListener = l; }
     public void setOnBadgeGestureListener(OnBadgeGestureListener l) { this.badgeGestureListener = l; }
@@ -83,6 +107,26 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
     }
     public void setShowRecentDot(boolean show) { this.showRecentDot = show; notifyDataSetChanged(); }
     public void setColumnCount(int count) { this.columnCount = count; notifyDataSetChanged(); }
+
+    /** 背景亮度提供者：由宿主注入（按目标 View 的屏幕位置查背景亮度） */
+    public void setLuminanceProvider(LuminanceProvider p) { this.luminanceProvider = p; }
+
+    /** 可读性开关：文字自动反色 / 文字虚化底衬 / 图标柔化底衬 */
+    public void setReadability(boolean autoContrast, boolean textScrim, boolean iconBackdrop) {
+        if (this.autoContrast == autoContrast && this.textScrim == textScrim
+                && this.iconBackdrop == iconBackdrop) {
+            return;
+        }
+        this.autoContrast = autoContrast;
+        this.textScrim = textScrim;
+        this.iconBackdrop = iconBackdrop;
+        notifyDataSetChanged();
+    }
+
+    /** 背景图换了：亮度网格已更新，让已显示的格子按新背景重新取色 */
+    public void invalidateContrast() {
+        notifyDataSetChanged();
+    }
 
     /**
      * 设置格子缩放百分比（图标与格子同比放大/ 缩小）。
@@ -158,6 +202,8 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
         } else if (defaultFontColors != null) {
             h.name.setTextColor(defaultFontColors); // 恢复默认配色（清除自定义字体颜色后）
         }
+        // 记下本次绑定的基础文字颜色：自动反色关闭时以它为准
+        h.baseTextColor = h.name.getCurrentTextColor();
 
         // 图标延迟加载
         if (e.icon != null) {
@@ -199,6 +245,183 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
         }
 
         bindKeyBadge(h, position);
+
+        // 可读性处理（自动反色/底衬）：绑定这一刻格子可能还没布局完，
+        // 先按当前状态刷一次，布局完成后再按真实位置取一次背景亮度
+        h.lastReadState = Integer.MIN_VALUE;
+        applyReadability(h);
+        h.itemView.post(() -> {
+            if (h.getBindingAdapterPosition() != RecyclerView.NO_POSITION) {
+                applyReadability(h);
+            }
+        });
+    }
+
+    /**
+     * 应用「可读性」外观：自动反色 / 文字虚化底衬 / 图标柔化底衬。
+     *
+     * 文字颜色按文字背后背景的亮度决定（WCAG 黑/白等对比点），
+     * 底衬颜色则跟着文字颜色走（浅色字配深底、深色字配浅底），保证任何组合下都协调。
+     * 状态没变时直接返回，滚动时每帧调用也不会产生多余的重绘。
+     */
+    private void applyReadability(VH h) {
+        if (!autoContrast && !textScrim && !iconBackdrop) {
+            if (h.lastReadState == 0) return;
+            h.lastReadState = 0;
+            h.name.setBackground(null);
+            h.name.setPadding(0, 0, 0, 0);
+            h.name.setShadowLayer(0, 0, 0, 0);
+            h.icon.setBackground(null);
+            h.icon.setPadding(0, 0, 0, 0);
+            return;
+        }
+
+        float textLum = luminanceProvider != null ? luminanceProvider.luminanceFor(h.name) : -1f;
+        boolean lightText;
+        if (autoContrast) {
+            lightText = textLum >= 0
+                    ? Contrast.prefersWhiteText(textLum)
+                    : Contrast.isLightColor(h.baseTextColor);
+        } else {
+            lightText = Contrast.isLightColor(h.baseTextColor);
+        }
+
+        float iconLum = iconBackdrop && luminanceProvider != null
+                ? luminanceProvider.luminanceFor(h.icon) : -1f;
+        // 图标底下是浅色还是深色：取不到亮度时按文字色的反面试（浅色字一般意味着深底）
+        boolean iconOnLight = iconLum >= 0 ? Contrast.isLight(iconLum) : !lightText;
+
+        int state = 0;
+        if (autoContrast && textLum >= 0) {
+            state |= Contrast.prefersWhiteText(textLum) ? 1 : 2;
+        }
+        if (textScrim) state |= 4;
+        if (iconBackdrop) state |= 8 | (iconOnLight ? 16 : 0);
+        if (state == h.lastReadState) return;
+        h.lastReadState = state;
+
+        if (autoContrast && textLum >= 0) {
+            h.name.setTextColor(lightText ? 0xFFFFFFFF : 0xFF111111);
+        }
+
+        if (textScrim) {
+            h.name.setBackground(lightText ? darkScrim(h) : lightScrim(h));
+            int ph = dp(h, 6);
+            int pv = dp(h, 1);
+            h.name.setPadding(ph, pv, ph, pv);
+            // 极轻的同色阴影向外柔化，让底衬与文字更像「糊在一起」而不是硬边
+            h.name.setShadowLayer(dp(h, 2), 0, 0,
+                    lightText ? 0x66000000 : 0x66FFFFFF);
+        } else {
+            h.name.setBackground(null);
+            h.name.setPadding(0, 0, 0, 0);
+            h.name.setShadowLayer(0, 0, 0, 0);
+        }
+
+        if (iconBackdrop) {
+            h.icon.setBackground(iconOnLight ? darkDisc() : lightDisc());
+            int ip = dp(h, 3);
+            h.icon.setPadding(ip, ip, ip, ip);
+        } else {
+            h.icon.setBackground(null);
+            h.icon.setPadding(0, 0, 0, 0);
+        }
+    }
+
+    /** 滚动时刷新可见格子的取色（背景不动、格子动了，文字背后的明暗会变） */
+    public void refreshVisibleContrast(RecyclerView rv) {
+        if (!autoContrast && !textScrim && !iconBackdrop) return;
+        for (int i = 0; i < rv.getChildCount(); i++) {
+            RecyclerView.ViewHolder vh = rv.getChildViewHolder(rv.getChildAt(i));
+            if (vh instanceof VH) applyReadability((VH) vh);
+        }
+    }
+
+    private static int dp(VH h, int value) {
+        return Math.round(value * h.itemView.getResources().getDisplayMetrics().density);
+    }
+
+    /** 文字底衬：浅色文字配深色柔化底 */
+    private Drawable darkScrim(VH h) {
+        if (scrimDark == null) scrimDark = new SoftScrimDrawable(0xC9000000, dp(h, 10));
+        return scrimDark;
+    }
+
+    /** 文字底衬：深色文字配浅色柔化底 */
+    private Drawable lightScrim(VH h) {
+        if (scrimLight == null) scrimLight = new SoftScrimDrawable(0xD9FFFFFF, dp(h, 10));
+        return scrimLight;
+    }
+
+    /** 图标柔化光晕：浅色（深色背景上用） */
+    private Drawable lightDisc() {
+        if (discLight == null) discLight = softDisc(0x59FFFFFF);
+        return discLight;
+    }
+
+    /** 图标柔化光晕：深色（浅色背景上用） */
+    private Drawable darkDisc() {
+        if (discDark == null) discDark = softDisc(0x33000000);
+        return discDark;
+    }
+
+    /** 圆形径向渐变光晕：中心不透明、向外柔和淡出 */
+    private static Drawable softDisc(final int color) {
+        ShapeDrawable sd = new ShapeDrawable(new OvalShape());
+        sd.setShaderFactory(new ShapeDrawable.ShaderFactory() {
+            @Override
+            public Shader resize(int width, int height) {
+                float radius = Math.min(width, height) / 2f;
+                return new RadialGradient(width / 2f, height / 2f, Math.max(1f, radius),
+                        new int[]{color, color, color & 0x00FFFFFF},
+                        new float[]{0f, 0.6f, 1f}, Shader.TileMode.CLAMP);
+            }
+        });
+        return sd;
+    }
+
+    /** 柔化圆角底衬：多层同心圆角矩形叠加，视觉上接近虚化边缘（比逐帧真模糊便宜几个数量级） */
+    private static final class SoftScrimDrawable extends Drawable {
+        private static final float[] GROW = {1.0f, 0.7f, 0.35f, 0f};
+        private static final float[] ALPHA = {0.10f, 0.22f, 0.45f, 1f};
+
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final int color;
+        private final float radius;
+
+        SoftScrimDrawable(int color, float radius) {
+            this.color = color;
+            this.radius = radius;
+        }
+
+        @Override
+        public void draw(@NonNull Canvas canvas) {
+            Rect b = getBounds();
+            int baseAlpha = Color.alpha(color);
+            int rgb = color & 0x00FFFFFF;
+            for (int i = 0; i < GROW.length; i++) {
+                float grow = radius * GROW[i] * 0.45f;
+                paint.setColor((Math.round(baseAlpha * ALPHA[i]) << 24) | rgb);
+                float r = radius + grow;
+                canvas.drawRoundRect(b.left - grow, b.top - grow,
+                        b.right + grow, b.bottom + grow, r, r, paint);
+            }
+        }
+
+        @Override
+        public void setAlpha(int alpha) {
+            // 颜色里已带透明度，无需再叠加
+        }
+
+        @Override
+        public void setColorFilter(android.graphics.ColorFilter colorFilter) {
+            paint.setColorFilter(colorFilter);
+        }
+
+        @Override
+        public int getOpacity() {
+            return android.graphics.PixelFormat.TRANSLUCENT;
+        }
     }
 
     /** 位置数字角标：前10个结果显示 1-9, 0 */
@@ -314,6 +537,12 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
         }
         h.name.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP,
                 GridMetrics.textSizeSp(columnCount));
+        // 文字宽度跟随格子：底衬只包住文字本身，而不是铺满整列
+        int maxName = Math.max(0, cellWidth - Math.round(dm.density * 8));
+        if (maxName != h.appliedMaxNameWidth) {
+            h.appliedMaxNameWidth = maxName;
+            h.name.setMaxWidth(maxName);
+        }
     }
 
     private CharSequence buildHighlightedLabel(AppEntry e) {
@@ -385,6 +614,12 @@ public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.VH> {
         int appliedColumnCount = -1;
         /** 记录当前 holder 已应用的格子缩放百分比，缩放变化时同样需要重设尺寸 */
         int appliedCellScale = -1;
+        /** 已应用的文字最大宽度（px），避免重复 requestLayout */
+        int appliedMaxNameWidth = -1;
+        /** 本次绑定的基础文字颜色（未开自动反色时用它，同时用于判断底衬深浅） */
+        int baseTextColor = Color.BLACK;
+        /** 上次应用的可读性状态位，没变就跳过（滚动时高频调用） */
+        int lastReadState = Integer.MIN_VALUE;
 
         VH(@NonNull View itemView) {
             super(itemView);
